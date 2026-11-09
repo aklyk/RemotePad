@@ -9,6 +9,8 @@
   <a href="LICENSE">MIT licensed</a> · iOS 16+ · macOS 13+ · SwiftUI
 </p>
 
+[![Build and validate](https://github.com/nacimoualla/RemotePad/actions/workflows/build.yml/badge.svg)](https://github.com/nacimoualla/RemotePad/actions/workflows/build.yml)
+
 RemotePad turns your iPhone’s screen into a wireless trackpad for your Mac. Move the pointer, click, scroll, drag, zoom, and navigate desktop spaces from the couch or across your desk. No accounts, cloud backend, or third-party app dependencies.
 
 > **Source release:** build the two apps using the instructions below. There is no App Store or notarized binary release yet. Moving the phone through the air does not move the pointer; slide your finger on its screen.

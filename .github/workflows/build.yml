@@ -13,7 +13,7 @@ jobs:
   apple-apps:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Protocol and gesture checks
         run: swift run ProtocolChecks
       - name: Build Mac companion
