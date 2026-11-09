@@ -1,0 +1,26 @@
+name: Build and validate
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apple-apps:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Protocol and gesture checks
+        run: swift run ProtocolChecks
+      - name: Build Mac companion
+        run: REMOTEPAD_SIGN_IDENTITY=- ./scripts/build-mac.sh
+      - name: Build iPhone app for Simulator
+        run: >-
+          xcodebuild -project RemotePad.xcodeproj -scheme RemotePad
+          -configuration Debug -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build
