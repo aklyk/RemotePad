@@ -1,4 +1,5 @@
 import Foundation
+import MultipeerConnectivity
 import RemotePadCore
 
 // Standalone checks also run on Macs with Command Line Tools and no XCTest SDK.
@@ -43,6 +44,38 @@ struct ProtocolChecks {
         check(ReceiverStatus.decode(Data(#"{"kind":"receiverStatus","version":2,"mouseControlEnabled":true}"#.utf8)) == nil, "Reject unsupported status version")
         check(ReceiverStatus.decode(Data(#"{"kind":"command","version":1,"mouseControlEnabled":true}"#.utf8)) == nil, "Reject wrong message kind")
         check(ReceiverStatus.decode(Data(repeating: 32, count: 513)) == nil, "Reject oversized status")
+        let phoneID = UUID().uuidString
+        let macID = UUID().uuidString
+        let token = String(repeating: "a", count: 64)
+        let grant = PairingGrant(macID: macID, name: "Test Mac", token: token)
+        check(PairingGrant.decode(try JSONEncoder().encode(grant)) == grant, "Remembered pairing round trip")
+        check(PairingSecrets.matches(token, token), "Matching pairing secrets")
+        check(!PairingSecrets.matches(token, String(repeating: "b", count: 64)), "Reject incorrect secret")
+        check(!PairingSecrets.matches(nil, token), "Missing secret must not authorize")
+        check(!PairingSecrets.matches("", ""), "Empty secrets must not authorize")
+        check(!PairingSecrets.isValidToken(String(repeating: "z", count: 64)), "Reject malformed token")
+        let request = PairingRequest(phoneID: phoneID, macID: macID, automatic: true)
+        let requestData = try JSONEncoder().encode(request)
+        check(PairingRequest.decode(requestData)?.phoneID == phoneID, "Pairing invitation round trip")
+        check(!String(data: requestData, encoding: .utf8)!.contains(token), "Invitation must not disclose secret")
+        check(PairingRequest.decode(Data(#"{"kind":"pairingRequest","phoneID":"bad","automatic":true}"#.utf8)) == nil, "Reject invalid phone identity")
+        let challenge = PairingChallenge(macID: macID)
+        let proof = PairingSecrets.proof(token: token, challenge: challenge, phoneID: phoneID)
+        check(PairingSecrets.matches(proof, PairingSecrets.proof(token: token, challenge: challenge, phoneID: phoneID)), "Verify returning phone")
+        check(!PairingSecrets.matches(proof, PairingSecrets.proof(token: token, challenge: PairingChallenge(macID: macID), phoneID: phoneID)), "Challenge replay must fail")
+        check(!PairingSecrets.matches(proof, PairingSecrets.proof(token: token, challenge: challenge, phoneID: UUID().uuidString)), "Proof is bound to phone")
+        check(PairingProof.decode(try JSONEncoder().encode(PairingProof(phoneID: phoneID, digest: proof)))?.digest == proof, "Proof round trip")
+        check(PairingGrant.decode(Data(repeating: 32, count: 1025)) == nil, "Reject oversized pairing grant")
+        check(PairingKeychain.newToken().map(PairingSecrets.isValidToken) == true, "Secure random token format")
+        check(!PairingSecrets.matches(proof, PairingSecrets.proof(token: token, challenge: challenge, phoneID: phoneID, role: "mac")), "Server proof cannot be reflected as client proof")
+        let authenticatedChallenge = PairingChallenge(macID: macID, nonce: challenge.nonce,
+            serverProof: PairingSecrets.proof(token: token, challenge: challenge, phoneID: phoneID, role: "mac"))
+        check(PairingChallenge.decode(try JSONEncoder().encode(authenticatedChallenge))?.nonce == challenge.nonce, "Authenticated challenge round trip")
+        check(PairingChallenge.decode(try JSONEncoder().encode(challenge)) == nil, "Reject challenge without server proof")
+        let peer = MCPeerID(displayName: "Pairing identity test")
+        let peerData = try NSKeyedArchiver.archivedData(withRootObject: peer, requiringSecureCoding: true)
+        let restoredPeer = try NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: peerData)
+        check(restoredPeer == peer, "Peer identity survives relaunch")
         print("Passed \(checks) protocol checks.")
     }
 }

@@ -66,7 +66,12 @@ struct RemotePadView: View {
         .foregroundStyle(.white).tint(mint).preferredColorScheme(.dark)
         .sheet(isPresented: $showSettings) { settings }
         .onChange(of: scenePhase) { phase in
-            if phase != .active { connection.disconnect() }
+            switch phase {
+            case .active: connection.resume()
+            case .inactive: connection.releaseDrag()
+            case .background: connection.suspend()
+            @unknown default: break
+            }
             UIApplication.shared.isIdleTimerDisabled = phase == .active && connection.connectedName != nil
         }
         .onChange(of: connection.connectedName) { name in UIApplication.shared.isIdleTimerDisabled = name != nil }
@@ -134,7 +139,7 @@ struct RemotePadView: View {
             }
             Text(connection.status).font(.callout).foregroundStyle(mint).fixedSize(horizontal: false, vertical: true)
             if connection.connecting { Button("Cancel") { connection.disconnect() } }
-            Label("Encrypted connection · approval on your Mac", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
+            Label("Encrypted connection · remembers approved pairing", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func clickButton(_ title: String, icon: String, action: MouseCommand.Action) -> some View {
@@ -151,6 +156,15 @@ struct RemotePadView: View {
                 Section("Pointer speed") {
                     Slider(value: $speed, in: 0.5...3, step: 0.1)
                     Text(String(format: "%.1f×", speed)).foregroundStyle(.secondary)
+                }
+                Section("Connection") {
+                    Toggle("Automatically reconnect", isOn: $connection.autoReconnect)
+                    if let name = connection.rememberedMacName {
+                        Label("Remembered: \(name)", systemImage: "desktopcomputer")
+                        Button("Forget this Mac", role: .destructive) { connection.forgetMac() }
+                    }
+                    Text("After the first approval, reconnects automatically when you reopen the app. iOS disconnects local peer sessions in the background; a force-closed app must be reopened.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Preferences") {
                     Toggle("Natural scrolling", isOn: $naturalScrolling)
@@ -175,7 +189,7 @@ struct RemotePadView: View {
                 }
                 Section("Connection help") {
                     Text("Keep the Mac companion open, allow Local Network access on both devices, and enable Accessibility for RemotePad Mac. Guest Wi-Fi or VPNs may block discovery.")
-                    Text("Leaving this app disconnects your Mac and releases any held mouse button.")
+                    Text("Leaving this app releases any held mouse button. Your approved pairing is saved, so reopening can reconnect automatically.")
                 }
             }.navigationTitle("Make it yours").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
         }.preferredColorScheme(.dark).tint(mint)

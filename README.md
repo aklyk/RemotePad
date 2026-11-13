@@ -20,8 +20,8 @@ RemotePad turns your iPhone’s screen into a wireless trackpad for your Mac. Mo
 - **Multi-touch controls:** pointer movement, clicks, scrolling, long-press dragging, pinch zoom, and three-finger navigation.
 - **Personal preferences:** adjustable pointer speed, natural or reversed scrolling, and optional gesture haptics, saved on your iPhone.
 - **Visible connection health:** the iPhone warns when Mac Accessibility access is blocked; the Mac displays received-command counts.
-- **Encrypted pairing:** nearby discovery with Apple’s Multipeer Connectivity, encryption required, and approval on the Mac for each connection.
-- **Control on your terms:** one controller at a time, disconnect and pause controls, and automatic mouse-button release after disconnect or six seconds without incoming packets.
+- **Encrypted pairing:** nearby discovery with Apple’s Multipeer Connectivity, encryption required, and approval on the Mac for the first pairing.
+- **Control on your terms:** one controller at a time, disconnect and pause controls, remembered-pairing revocation, and automatic mouse-button release after disconnect or six seconds without incoming packets.
 - **Native apps:** SwiftUI interfaces, UIKit gesture recognition, Core Graphics input, and matching app icons.
 
 ## Get started
@@ -73,7 +73,22 @@ If iOS reports an untrusted developer, open **Settings → General → VPN & Dev
 
 Open both apps, select your Mac on the iPhone, and click **Allow Connection** in the Mac companion. Both devices should be awake on the same Wi-Fi. Approve only a connection you just initiated: device display names are not verified identities.
 
-Once connected, slide a finger across the large trackpad area. The iPhone keeps its screen awake while connected. Leaving the app disconnects it; open it and select the Mac again to reconnect.
+Once connected, slide a finger across the large trackpad area. The iPhone keeps its screen awake while connected. Leaving the app disconnects it; open it again to reconnect automatically after the first pairing.
+
+## Automatic reconnection
+
+Approve your iPhone once in the Mac companion. The apps save the pairing credential in each device’s Keychain and remember their peer identities. **Automatically reconnect** is enabled by default in the iPhone’s connection settings. When you reopen RemotePad or return to it, it discovers the remembered Mac and reconnects without another approval prompt. Failed automatic attempts use a short backoff and stop after three attempts; tap the Mac to approve pairing again if credentials were revoked.
+
+**iOS background limit:** [Multipeer Connectivity disconnects sessions in the background](https://developer.apple.com/documentation/multipeerconnectivity). RemotePad cannot stay connected indefinitely while the iPhone app is closed or force-quit. It releases held input on leaving the foreground, remembers the pairing, and reconnects when you return. It does not use audio, location, or other unrelated background modes to bypass iOS restrictions.
+
+On the Mac, closing the window keeps the companion running in the **menu bar**. Choose **Open RemotePad** there to reopen the window. Quitting the Mac app stops discovery and connections until it is launched again.
+
+- **Forget this Mac** on iPhone removes its stored credential.
+- **Forget All** on Mac revokes all remembered iPhones; they need fresh approval.
+- **Disconnect** on iPhone stops automatic retries until you return to the app or connect manually.
+- **Disconnect & Pause** on Mac pauses incoming connections until **Allow connections** is enabled again.
+
+Returning phones must answer a fresh HMAC-SHA256 challenge before the Mac accepts any mouse commands. Secrets are delivered over the approved encrypted session, stored in Keychain, and never put in Bonjour advertisements or invitation contexts. The Mac disconnects a provisional session if authentication does not complete within five seconds.
 
 ## Gesture guide
 
@@ -102,7 +117,7 @@ Once connected, slide a finger across the large trackpad area. The iPhone keeps 
 | Connected, but the pointer does not move | Check the phone’s permission warning and the Mac’s received-command counter. Enable Accessibility for the exact Mac app you launched. |
 | Accessibility is on, but RemotePad says it is blocked | Remove RemotePad Mac from the Accessibility list, add the current `.app` again using **+**, enable it, then quit and reopen the companion. This can happen after signing changes. |
 | Pairing expires | Select the Mac again and approve within 25 seconds. |
-| Connection drops when switching iPhone apps | Expected: RemotePad disconnects when it leaves the active state. Reconnect when you return. |
+| Connection drops when switching iPhone apps | Expected: iOS disconnects peer sessions in the background. Return to RemotePad to reconnect automatically. |
 | Zoom or space gestures do nothing | Focus a compatible Mac app and check its keyboard shortcuts. |
 | App installs but iOS blocks opening it | Complete developer-profile trust and Developer Mode setup on the iPhone. |
 
@@ -111,7 +126,7 @@ The Mac companion only controls your current desktop session. Login screens and 
 ## Development
 
 ```sh
-# Validate command decoding, permission feedback, and gesture calculations.
+# Validate command decoding, permission feedback, pairing authentication, and gesture calculations.
 swift run ProtocolChecks
 
 # Build, package, sign, and verify the Mac companion.

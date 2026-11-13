@@ -74,3 +74,125 @@ public struct ReceiverStatus: Codable, Equatable {
         return status
     }
 }
+
+public struct PairingRequest: Codable {
+    public let kind: String
+    public let phoneID: String
+    public let macID: String?
+    public let automatic: Bool
+    public init(phoneID: String, macID: String? = nil, automatic: Bool = false) {
+        kind = "pairingRequest"
+        self.phoneID = phoneID; self.macID = macID; self.automatic = automatic
+    }
+    public static func decode(_ data: Data?) -> Self? {
+        guard let data, data.count <= 512, let value = try? JSONDecoder().decode(Self.self, from: data),
+              value.kind == "pairingRequest", UUID(uuidString: value.phoneID) != nil else { return nil }
+        return value
+    }
+}
+
+public struct PairingGrant: Codable, Equatable {
+    public let kind: String
+    public let macID: String
+    public let name: String
+    public let token: String
+    public init(macID: String, name: String, token: String) {
+        kind = "pairingGrant"; self.macID = macID; self.name = name; self.token = token
+    }
+    public static func decode(_ data: Data) -> Self? {
+        guard data.count <= 1024, let value = try? JSONDecoder().decode(Self.self, from: data),
+              value.kind == "pairingGrant", UUID(uuidString: value.macID) != nil,
+              PairingSecrets.isValidToken(value.token) else { return nil }
+        return value
+    }
+}
+
+// Pairing credentials never go into UserDefaults or the repository.
+public enum PairingSecrets {
+    public static func isValidToken(_ token: String) -> Bool {
+        token.utf8.count == 64 && token.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    public static func matches(_ provided: String?, _ stored: String?) -> Bool {
+        guard let provided, let stored, isValidToken(provided), isValidToken(stored) else { return false }
+        return zip(provided.utf8, stored.utf8).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
+    }
+}
+
+import Security
+
+public enum PairingKeychain {
+    private static let service = (Bundle.main.bundleIdentifier ?? "com.remotepad") + ".pairing"
+    public static func read(_ account: String) -> Data? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: account,
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+    @discardableResult public static func save(_ data: Data, account: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: account]
+        let attributes: [String: Any] = [kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let result = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if result == errSecSuccess { return true }
+        guard result == errSecItemNotFound else { return false }
+        return SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil) == errSecSuccess
+    }
+    public static func remove(_ account: String) {
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary)
+    }
+    public static func newToken() -> String? {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+public enum DeviceIdentity {
+    public static func identifier(defaults: UserDefaults = .standard) -> String {
+        if let value = defaults.string(forKey: "deviceID"), UUID(uuidString: value) != nil { return value }
+        let value = UUID().uuidString
+        defaults.set(value, forKey: "deviceID")
+        return value
+    }
+}
+
+import CryptoKit
+
+public struct PairingChallenge: Codable {
+    public let kind: String
+    public let nonce: String
+    public let macID: String
+    public let serverProof: String
+    public init(macID: String, nonce: String = UUID().uuidString, serverProof: String = "") {
+        kind = "pairingChallenge"; self.nonce = nonce; self.macID = macID; self.serverProof = serverProof
+    }
+    public static func decode(_ data: Data) -> Self? {
+        guard data.count <= 512, let value = try? JSONDecoder().decode(Self.self, from: data),
+              value.kind == "pairingChallenge", UUID(uuidString: value.nonce) != nil,
+              UUID(uuidString: value.macID) != nil, PairingSecrets.isValidToken(value.serverProof) else { return nil }
+        return value
+    }
+}
+public struct PairingProof: Codable {
+    public let kind: String
+    public let phoneID: String
+    public let digest: String
+    public init(phoneID: String, digest: String) { kind = "pairingProof"; self.phoneID = phoneID; self.digest = digest }
+    public static func decode(_ data: Data) -> Self? {
+        guard data.count <= 512, let value = try? JSONDecoder().decode(Self.self, from: data),
+              value.kind == "pairingProof", UUID(uuidString: value.phoneID) != nil,
+              PairingSecrets.isValidToken(value.digest) else { return nil }
+        return value
+    }
+}
+extension PairingSecrets {
+    public static func proof(token: String, challenge: PairingChallenge, phoneID: String, role: String = "phone") -> String {
+        let data = Data((role + "|" + challenge.nonce + "|" + challenge.macID + "|" + phoneID).utf8)
+        return HMAC<SHA256>.authenticationCode(for: data, using: SymmetricKey(data: Data(token.utf8)))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+}

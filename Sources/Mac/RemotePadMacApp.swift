@@ -4,7 +4,7 @@ import SwiftUI
 struct RemotePadMacApp: App {
     @StateObject private var receiver = MacReceiver()
     var body: some Scene {
-        WindowGroup("RemotePad for Mac") {
+        WindowGroup("RemotePad for Mac", id: "main") {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(spacing: 14) {
                     Image(systemName: "cursorarrow.motionlines").font(.system(size: 32)).foregroundStyle(.mint)
@@ -29,7 +29,7 @@ struct RemotePadMacApp: App {
                 if let name = receiver.pendingName {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Allow \(name) to control your mouse?").font(.headline)
-                        Text("Approve only the iPhone you are pairing now.").foregroundStyle(.secondary)
+                        Text("Approve only your iPhone. This remembers its pairing so it can reconnect automatically.").foregroundStyle(.secondary)
                         HStack {
                             Button("Decline") { receiver.answer(false) }
                             Button("Allow Connection") { receiver.answer(true) }.buttonStyle(.borderedProminent).tint(.mint)
@@ -38,17 +38,43 @@ struct RemotePadMacApp: App {
                 }
                 if let name = receiver.controller {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack { Text("Controlled by \(name)"); Spacer(); Button("Disconnect") { receiver.disconnect() } }
+                        HStack { Text("Controlled by \(name)"); Spacer(); Button("Disconnect & Pause") { receiver.setAccepting(false) } }
                         Label("\(receiver.lastAction) · \(receiver.receivedCommands) commands", systemImage: "waveform.path")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                if receiver.rememberedPhones > 0 {
+                    HStack {
+                        Label("\(receiver.rememberedPhones) remembered iPhone(s)", systemImage: "iphone")
+                        Spacer()
+                        Button("Forget All") { receiver.forgetPhones() }
+                    }.font(.caption)
+                }
                 Toggle("Allow new connections", isOn: Binding(get: { receiver.accepting }, set: receiver.setAccepting))
-                Text("Keep this app open. Connect your iPhone to the same Wi-Fi, open RemotePad, and select this Mac. Each connection requires your approval.")
+                Text("Keep this app open. Connect your iPhone to the same Wi-Fi, open RemotePad, and select this Mac. The first connection needs approval. Remembered iPhones reconnect automatically. Closing this window keeps RemotePad running in the menu bar.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .padding(32).frame(width: 500).tint(.mint)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in receiver.disconnect() }
         }.windowResizability(.contentSize)
+        MenuBarExtra("RemotePad", systemImage: "cursorarrow.motionlines") {
+            RemotePadMenu(receiver: receiver)
+        }
+    }
+}
+
+private struct RemotePadMenu: View {
+    @ObservedObject var receiver: MacReceiver
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Text(receiver.status)
+        Button("Open RemotePad") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        Toggle("Allow connections", isOn: Binding(get: { receiver.accepting }, set: receiver.setAccepting))
+        if receiver.controller != nil { Button("Disconnect & Pause") { receiver.setAccepting(false) } }
+        Divider()
+        Button("Quit RemotePad") { receiver.disconnect(); NSApp.terminate(nil) }
     }
 }
