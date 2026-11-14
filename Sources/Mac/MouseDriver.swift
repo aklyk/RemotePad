@@ -6,6 +6,7 @@ import RemotePadCore
 
 final class MouseDriver {
     private var dragging = false
+    private(set) var lastIssue: String?
     var permitted: Bool { AXIsProcessTrusted() }
 
     func requestPermission() {
@@ -14,6 +15,7 @@ final class MouseDriver {
     }
 
     func perform(_ command: MouseCommand) {
+        lastIssue = nil
         guard permitted, let location = CGEvent(source: nil)?.location else { return }
         switch command.action {
         case .heartbeat: break
@@ -46,10 +48,14 @@ final class MouseDriver {
         case .zoomIn: shortcut(24, flags: .maskCommand) // Command + equals
         case .zoomOut: shortcut(27, flags: .maskCommand)
         case .resetZoom: shortcut(29, flags: .maskCommand)
-        case .previousSpace: shortcut(123, flags: .maskControl)
-        case .nextSpace: shortcut(124, flags: .maskControl)
-        case .missionControl: shortcut(126, flags: .maskControl)
-        case .appWindows: shortcut(125, flags: .maskControl)
+        case .previousSpace, .nextSpace, .missionControl, .appWindows:
+            let preferences = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString,
+                "com.apple.symbolichotkeys" as CFString) as? [String: Any] ?? [:]
+            if let configured = NavigationShortcut.resolve(command.action, preferences: preferences) {
+                shortcut(CGKeyCode(configured.keyCode), flags: CGEventFlags(rawValue: configured.flags))
+            } else {
+                lastIssue = "Navigation shortcut disabled: check Keyboard → Mission Control"
+            }
         }
     }
 

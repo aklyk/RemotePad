@@ -232,8 +232,9 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
             self.lastPacketAt = Date()
             if command.action == .heartbeat { self.sendStatus(); return }
             self.receivedCommands += 1
-            self.lastAction = self.permission ? "Receiving input" : "Input blocked: enable Accessibility"
             self.driver.perform(command)
+            let navigation: [MouseCommand.Action: String] = [.nextSpace: "Next desktop space", .previousSpace: "Previous desktop space", .missionControl: "Mission Control", .appWindows: "Application windows"]
+            self.lastAction = self.permission ? (self.driver.lastIssue ?? navigation[command.action] ?? "Receiving input") : "Input blocked: enable Accessibility"
         }
     }
     func session(_ session: MCSession, didReceive stream: InputStream, withName: String, fromPeer: MCPeerID) {}

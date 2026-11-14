@@ -106,7 +106,7 @@ Returning phones must answer a fresh HMAC-SHA256 challenge before the Mac accept
 | Three-finger swipe up / down | Mission Control / application windows |
 | Sliders icon or Gesture guide | Preferences and gesture reference |
 
-**Compatibility:** zoom sends Command-plus/minus/zero to the active Mac app. The app must support those shortcuts. Space and window navigation sends Control-arrow shortcuts; enable these in **System Settings → Keyboard → Keyboard Shortcuts → Mission Control** if needed. Space switching requires another desktop space. Mac shortcuts and keyboard layouts can affect these actions.
+**Compatibility:** zoom sends Command-plus/minus/zero to the active Mac app. The app must support those shortcuts. Space and window navigation reads your configured Mission Control shortcuts, including custom modifier keys; enable these in **System Settings → Keyboard → Keyboard Shortcuts → Mission Control** if needed. Space switching requires another desktop space. Mac shortcuts and keyboard layouts can affect these actions.
 
 ## Troubleshooting
 

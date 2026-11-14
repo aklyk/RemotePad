@@ -55,6 +55,44 @@ public enum TrackpadNavigation {
     }
 }
 
+/// Fires at the threshold while fingers are still down, once per swipe.
+public struct NavigationStroke {
+    private var fired = false
+    public init() {}
+    public mutating func consume(x: Double, y: Double) -> MouseCommand.Action? {
+        guard !fired, let action = TrackpadNavigation.action(x: x, y: y) else { return nil }
+        fired = true
+        return action
+    }
+}
+
+public struct NavigationShortcut: Equatable {
+    public let keyCode: UInt16
+    public let flags: UInt64
+    public init(keyCode: UInt16, flags: UInt64) { self.keyCode = keyCode; self.flags = flags }
+    public static func identifier(for action: MouseCommand.Action) -> String? {
+        switch action {
+        case .previousSpace: return "79"
+        case .nextSpace: return "81"
+        case .missionControl: return "32"
+        case .appWindows: return "33"
+        default: return nil
+        }
+    }
+    public static func resolve(_ action: MouseCommand.Action, preferences: [String: Any]) -> NavigationShortcut? {
+        guard let identifier = identifier(for: action) else { return nil }
+        let defaultKeys: [String: UInt16] = ["79": 123, "81": 124, "32": 126, "33": 125]
+        let fallback = NavigationShortcut(keyCode: defaultKeys[identifier]!, flags: 1 << 18)
+        guard let entry = preferences[identifier] as? [String: Any] else { return fallback }
+        if let enabled = entry["enabled"] as? NSNumber, !enabled.boolValue { return nil }
+        guard let value = entry["value"] as? [String: Any],
+              let parameters = value["parameters"] as? [NSNumber], parameters.count == 3,
+              parameters[1].intValue >= 0, parameters[1].intValue <= 127,
+              parameters[2].int64Value >= 0, parameters[2].uint64Value <= UInt64(UInt32.max) else { return nil }
+        return NavigationShortcut(keyCode: parameters[1].uint16Value, flags: parameters[2].uint64Value)
+    }
+}
+
 /// Receiver feedback is separate from commands and is size/version checked.
 public struct ReceiverStatus: Codable, Equatable {
     public let kind: String

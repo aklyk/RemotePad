@@ -76,6 +76,19 @@ struct ProtocolChecks {
         let peerData = try NSKeyedArchiver.archivedData(withRootObject: peer, requiringSecureCoding: true)
         let restoredPeer = try NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: peerData)
         check(restoredPeer == peer, "Peer identity survives relaunch")
+        let fnControl: UInt64 = 8_650_752
+        let customized: [String: Any] = ["81": ["enabled": true, "value": ["parameters": [65535, 124, fnControl]]]]
+        check(NavigationShortcut.resolve(.nextSpace, preferences: customized) == NavigationShortcut(keyCode: 124, flags: fnControl), "Preserve configured Fn-Control shortcut")
+        check(NavigationShortcut.resolve(.previousSpace, preferences: [:]) == NavigationShortcut(keyCode: 123, flags: 1 << 18), "Use default shortcut when no override exists")
+        check(NavigationShortcut.resolve(.nextSpace, preferences: ["81": ["enabled": false]]) == nil, "Respect disabled shortcuts")
+        check(NavigationShortcut.resolve(.nextSpace, preferences: ["81": ["enabled": true, "value": ["parameters": [1, 999, 1]]]]) == nil, "Reject invalid virtual key")
+        check(NavigationShortcut.resolve(.leftClick, preferences: [:]) == nil, "Clicks cannot resolve to navigation keys")
+        var stroke = NavigationStroke()
+        check(stroke.consume(x: -20, y: 2) == nil, "No navigation before swipe threshold")
+        check(stroke.consume(x: -50, y: 2) == .nextSpace, "Navigate while fingers are down")
+        check(stroke.consume(x: -150, y: 2) == nil, "One space change per swipe")
+        stroke = NavigationStroke()
+        check(stroke.consume(x: 50, y: 2) == .previousSpace, "New swipe can navigate again")
         print("Passed \(checks) protocol checks.")
     }
 }

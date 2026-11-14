@@ -33,6 +33,7 @@ struct Trackpad: UIViewRepresentable {
         let spaces = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.threeFingerSwipe(_:)))
         spaces.minimumNumberOfTouches = 3
         spaces.maximumNumberOfTouches = 3
+        coordinator.spacesRecognizer = spaces
         let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tap(_:)))
         let double = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.doubleTap(_:)))
         double.numberOfTapsRequired = 2
@@ -68,6 +69,11 @@ struct Trackpad: UIViewRepresentable {
         weak var scrollRecognizer: UIPanGestureRecognizer?
         weak var pinchRecognizer: UIPinchGestureRecognizer?
         weak var holdRecognizer: UILongPressGestureRecognizer?
+        weak var spacesRecognizer: UIPanGestureRecognizer?
+        private var navigationStroke = NavigationStroke()
+        private var isNavigating: Bool {
+            spacesRecognizer?.state == .began || spacesRecognizer?.state == .changed
+        }
         private var ownsDrag = false
         private var pinchConsumed = false
         private var lastPinchScale = 1.0
@@ -79,12 +85,15 @@ struct Trackpad: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
             let pair = [gestureRecognizer, other]
+            // A second finger may have started scrolling before the third lands.
+            // Let navigation recognize, then suppress lower-finger actions below.
+            if pair.contains(where: { $0 === spacesRecognizer }) { return true }
             return (pair.contains { $0 === holdRecognizer } && pair.contains { $0 === moveRecognizer }) ||
                    (pair.contains { $0 === pinchRecognizer } && pair.contains { $0 === scrollRecognizer })
         }
         @objc func move(_ gesture: UIPanGestureRecognizer) {
             defer { gesture.setTranslation(.zero, in: gesture.view) }
-            guard gesture.state == .changed else { return }
+            guard gesture.state == .changed, gesture.numberOfTouches == 1, !isNavigating else { return }
             let delta = gesture.translation(in: gesture.view)
             parent.send(MouseCommand(.move, x: bounded(Double(delta.x) * parent.sensitivity), y: bounded(Double(delta.y) * parent.sensitivity)))
         }
@@ -93,14 +102,14 @@ struct Trackpad: UIViewRepresentable {
             if gesture.state == .began {
                 pinchConsumed = pinchRecognizer?.state == .began || pinchRecognizer?.state == .changed
             }
-            guard gesture.state == .changed, !parent.dragging, !pinchConsumed,
+            guard gesture.state == .changed, gesture.numberOfTouches == 2, !isNavigating, !parent.dragging, !pinchConsumed,
                   pinchRecognizer?.state != .began, pinchRecognizer?.state != .changed else { return }
             let delta = gesture.translation(in: gesture.view)
             let direction = parent.naturalScrolling ? 2.0 : -2.0
             parent.send(MouseCommand(.scroll, x: bounded(Double(delta.x) * direction), y: bounded(Double(delta.y) * direction)))
         }
         @objc func pinch(_ gesture: UIPinchGestureRecognizer) {
-            guard !parent.dragging else { return }
+            guard !parent.dragging, !isNavigating, gesture.numberOfTouches == 2 else { return }
             if gesture.state == .began {
                 pinchConsumed = true
                 lastPinchScale = 1
@@ -132,9 +141,14 @@ struct Trackpad: UIViewRepresentable {
             tick()
         }
         @objc func threeFingerSwipe(_ gesture: UIPanGestureRecognizer) {
-            guard gesture.state == .ended, !parent.dragging else { return }
+            if gesture.state == .began {
+                navigationStroke = NavigationStroke()
+                endHold()
+            }
+            guard gesture.state == .began || gesture.state == .changed,
+                  gesture.numberOfTouches == 3, !parent.dragging else { return }
             let delta = gesture.translation(in: gesture.view)
-            guard let action = TrackpadNavigation.action(x: Double(delta.x), y: Double(delta.y)) else { return }
+            guard let action = navigationStroke.consume(x: Double(delta.x), y: Double(delta.y)) else { return }
             parent.send(MouseCommand(action))
             tick()
         }

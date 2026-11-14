@@ -38,7 +38,7 @@ struct RemotePadView: View {
                             Label("On your Mac, enable RemotePad in Privacy & Security → Accessibility. After an update, remove and add the app again if needed.", systemImage: "hand.raised.fill")
                                 .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                         }
-                        trackpad.frame(height: max(220, geometry.size.height - (connection.mouseControlEnabled == false ? 480 : 400)))
+                        trackpad.frame(height: max(220, geometry.size.height - (connection.mouseControlEnabled == false ? 500 : 420)))
                         HStack(spacing: 12) {
                             clickButton("Left click", icon: "computermouse", action: .leftClick)
                             clickButton("Right click", icon: "cursorarrow.click.2", action: .rightClick)
@@ -51,8 +51,18 @@ struct RemotePadView: View {
                                     .foregroundStyle(connection.dragging ? .black : .white)
                             }.accessibilityLabel(connection.dragging ? "Release drag" : "Start drag")
                         }
-                        Button { showSettings = true } label: {
-                            Label("Gesture guide", systemImage: "hand.tap.fill").font(.caption.weight(.semibold))
+                        HStack {
+                            Button { connection.send(MouseCommand(.previousSpace)) } label: {
+                                Image(systemName: "rectangle.portrait.and.arrow.left").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Previous desktop space").disabled(connection.dragging)
+                            Spacer()
+                            Button { showSettings = true } label: {
+                                Label("Gesture guide", systemImage: "hand.tap.fill").font(.caption.weight(.semibold))
+                            }
+                            Spacer()
+                            Button { connection.send(MouseCommand(.nextSpace)) } label: {
+                                Image(systemName: "rectangle.portrait.and.arrow.right").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Next desktop space").disabled(connection.dragging)
                         }
                         Text(connection.dragging ? "Dragging · lift your finger or tap Release" : "Move · scroll · pinch · hold to drag")
                             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -185,7 +195,7 @@ struct RemotePadView: View {
                     Label("Tap Drag, move, then Release", systemImage: "hand.draw")
                 }
                 Section("Gesture compatibility") {
-                    Text("Zoom uses ⌘+ / ⌘− / ⌘0 in the active Mac app. Space and window gestures use the default Control-arrow shortcuts; enable them in Mac Keyboard Shortcuts → Mission Control if needed.")
+                    Text("Zoom uses ⌘+ / ⌘− / ⌘0 in the active Mac app. Space and window gestures use your Mac’s configured Mission Control keyboard shortcuts, including custom modifiers. Enable these shortcuts in Mac Keyboard Shortcuts → Mission Control if needed.")
                 }
                 Section("Connection help") {
                     Text("Keep the Mac companion open, allow Local Network access on both devices, and enable Accessibility for RemotePad Mac. Guest Wi-Fi or VPNs may block discovery.")
