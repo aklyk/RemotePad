@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Protocol and gesture checks
         run: swift run ProtocolChecks
+      - name: Mouse event regression checks
+        run: ./scripts/check-mouse-driver.sh
       - name: Build Mac companion
         run: REMOTEPAD_SIGN_IDENTITY=- ./scripts/build-mac.sh
       - name: Build iPhone app for Simulator

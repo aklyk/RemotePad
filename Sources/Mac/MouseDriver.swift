@@ -5,9 +5,26 @@ import RemotePadCore
 #endif
 
 final class MouseDriver {
+    private let source = CGEventSource(stateID: .privateState)
+    private let permissionOverride: (() -> Bool)?
+    private let eventSink: ((CGEvent) -> Void)?
+    private let navigationOverride: ((MouseCommand.Action) -> NavigationShortcut?)?
     private var dragging = false
     private(set) var lastIssue: String?
-    var permitted: Bool { AXIsProcessTrusted() }
+    var permitted: Bool { permissionOverride?() ?? AXIsProcessTrusted() }
+
+    init(permissionOverride: (() -> Bool)? = nil, eventSink: ((CGEvent) -> Void)? = nil,
+         navigationOverride: ((MouseCommand.Action) -> NavigationShortcut?)? = nil) {
+        self.permissionOverride = permissionOverride
+        self.eventSink = eventSink
+        self.navigationOverride = navigationOverride
+    }
+
+    private func emit(_ event: CGEvent?) {
+        guard let event else { return }
+        if let eventSink { eventSink(event) }
+        else { event.post(tap: .cghidEventTap) }
+    }
 
     func requestPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -33,8 +50,10 @@ final class MouseDriver {
             }.min { hypot($0.x - desired.x, $0.y - desired.y) < hypot($1.x - desired.x, $1.y - desired.y) } ?? location
             post(dragging ? .leftMouseDragged : .mouseMoved, at: target)
         case .scroll:
-            CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                    wheel1: Int32(command.y.rounded()), wheel2: Int32(command.x.rounded()), wheel3: 0)?.post(tap: .cghidEventTap)
+            let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                    wheel1: Int32(command.y.rounded()), wheel2: Int32(command.x.rounded()), wheel3: 0)
+            event?.flags = []
+            emit(event)
         case .leftClick: click(at: location, right: false)
         case .rightClick: click(at: location, right: true)
         case .doubleClick:
@@ -49,9 +68,7 @@ final class MouseDriver {
         case .zoomOut: shortcut(27, flags: .maskCommand)
         case .resetZoom: shortcut(29, flags: .maskCommand)
         case .previousSpace, .nextSpace, .missionControl, .appWindows:
-            let preferences = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString,
-                "com.apple.symbolichotkeys" as CFString) as? [String: Any] ?? [:]
-            if let configured = NavigationShortcut.resolve(command.action, preferences: preferences) {
+            if let configured = navigationShortcut(command.action) {
                 shortcut(CGKeyCode(configured.keyCode), flags: CGEventFlags(rawValue: configured.flags))
             } else {
                 lastIssue = "Navigation shortcut disabled: check Keyboard → Mission Control"
@@ -65,14 +82,40 @@ final class MouseDriver {
         post(.leftMouseUp, at: CGEvent(source: nil)?.location ?? .zero)
     }
 
+    private func navigationShortcut(_ action: MouseCommand.Action) -> NavigationShortcut? {
+        if let navigationOverride { return navigationOverride(action) }
+        let preferences = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString,
+            "com.apple.symbolichotkeys" as CFString) as? [String: Any] ?? [:]
+        return NavigationShortcut.resolve(action, preferences: preferences)
+    }
+
     private func shortcut(_ key: CGKeyCode, flags: CGEventFlags) {
         guard !dragging else { return }
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true)
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false)
+        // Explicit press/release events prevent Control/Command from leaking into later input.
+        let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl, 59), (.maskAlternate, 58),
+            (.maskShift, 56), (.maskCommand, 55), (.maskSecondaryFn, 63)]
+        var pressed: CGEventFlags = []
+        for (flag, code) in modifiers where flags.contains(flag) {
+            pressed.insert(flag)
+            modifier(code, flags: pressed)
+        }
+        let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         down?.flags = flags
         up?.flags = flags
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        emit(down)
+        emit(up)
+        for (flag, code) in modifiers.reversed() where flags.contains(flag) {
+            pressed.remove(flag)
+            modifier(code, flags: pressed)
+        }
+    }
+
+    private func modifier(_ key: CGKeyCode, flags: CGEventFlags) {
+        let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: !flags.isEmpty)
+        event?.type = .flagsChanged
+        event?.flags = flags
+        emit(event)
     }
 
     private func click(at point: CGPoint, right: Bool, count: Int64 = 1) {
@@ -82,9 +125,11 @@ final class MouseDriver {
     }
 
     private func post(_ type: CGEventType, at point: CGPoint, count: Int64 = 1) {
-        let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point,
+        let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
                             mouseButton: type == .rightMouseDown || type == .rightMouseUp ? .right : .left)
+        // The trackpad's clicks are always plain clicks, even after a navigation shortcut.
+        event?.flags = []
         event?.setIntegerValueField(.mouseEventClickState, value: count)
-        event?.post(tap: .cghidEventTap)
+        emit(event)
     }
 }

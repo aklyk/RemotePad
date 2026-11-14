@@ -129,6 +129,9 @@ The Mac companion only controls your current desktop session. Login screens and 
 # Validate command decoding, permission feedback, pairing authentication, and gesture calculations.
 swift run ProtocolChecks
 
+# Check click buttons and shortcut modifier cleanup without posting any input.
+./scripts/check-mouse-driver.sh
+
 # Build, package, sign, and verify the Mac companion.
 ./scripts/build-mac.sh
 

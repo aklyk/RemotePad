@@ -7,6 +7,6 @@ let package = Package(
     targets: [
         .target(name: "RemotePadCore", path: "Sources/Shared"),
         .executableTarget(name: "RemotePadMac", dependencies: ["RemotePadCore"], path: "Sources/Mac"),
-        .executableTarget(name: "ProtocolChecks", dependencies: ["RemotePadCore"], path: "Tests/RemotePadTests")
+        .executableTarget(name: "ProtocolChecks", dependencies: ["RemotePadCore"], path: "Tests/RemotePadTests", exclude: ["MouseDriverChecks.swift"])
     ]
 )
