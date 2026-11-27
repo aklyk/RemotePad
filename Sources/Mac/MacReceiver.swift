@@ -2,6 +2,7 @@ import AppKit
 import MultipeerConnectivity
 import Combine
 import Network
+import OSLog
 #if canImport(RemotePadCore)
 import RemotePadCore
 #endif
@@ -300,6 +301,10 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         if command.action == .stopScroll { driver.perform(command); return }
         receivedCommands += 1
         driver.perform(command)
+        if NavigationShortcut.identifier(for: command.action) != nil {
+            let result = !permission ? "accessibility-blocked" : driver.lastIssue ?? "sent"
+            Self.gestureLog.notice("Navigation \(command.action.rawValue, privacy: .public): \(result, privacy: .public)")
+        }
         if let issue = driver.lastIssue { lastAction = issue }
         else if !permission { lastAction = "Input blocked: enable Accessibility" }
         else if let gesture = Self.gestureNames[command.action] { lastAction = gesture }
@@ -311,6 +316,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         }
     }
 
+    private static let gestureLog = Logger(subsystem: "com.remotepad.mac", category: "Gestures")
     private static let gestureNames: [MouseCommand.Action: String] = [
         .nextSpace: "Next desktop space", .previousSpace: "Previous desktop space",
         .missionControl: "Mission Control", .appWindows: "Application windows", .showDesktop: "Show Desktop",

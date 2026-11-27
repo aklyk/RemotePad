@@ -6,6 +6,7 @@ import RemotePadCore
 
 final class MouseDriver {
     private let source = CGEventSource(stateID: .privateState)
+    private let keyboardSource = CGEventSource(stateID: .hidSystemState)
     private let permissionOverride: (() -> Bool)?
     private let eventSink: ((CGEvent) -> Void)?
     private let navigationOverride: ((MouseCommand.Action) -> NavigationShortcut?)?
@@ -214,25 +215,31 @@ final class MouseDriver {
         // Explicit press/release events prevent Control/Command from leaking into later input.
         let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl, 59), (.maskAlternate, 58),
             (.maskShift, 56), (.maskCommand, 55), (.maskSecondaryFn, 63)]
+        // Arrow events carry both flags even when the Fn key itself isn't held.
+        // WindowServer uses those flags when matching desktop navigation shortcuts.
+        let arrowFlags: CGEventFlags = [.maskSecondaryFn, .maskNumericPad]
+        let arrowKey = (123...126).contains(key)
+        let keyFlags = arrowKey ? flags.union(arrowFlags) : flags
+        let heldFlags = arrowKey ? flags.subtracting(arrowFlags) : flags
         var pressed: CGEventFlags = []
-        for (flag, code) in modifiers where flags.contains(flag) {
+        for (flag, code) in modifiers where heldFlags.contains(flag) {
             pressed.insert(flag)
             modifier(code, flags: pressed)
         }
-        let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
-        let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
-        down?.flags = flags
-        up?.flags = flags
+        let down = CGEvent(keyboardEventSource: keyboardSource, virtualKey: key, keyDown: true)
+        let up = CGEvent(keyboardEventSource: keyboardSource, virtualKey: key, keyDown: false)
+        down?.flags = keyFlags
+        up?.flags = keyFlags
         emit(down)
         emit(up)
-        for (flag, code) in modifiers.reversed() where flags.contains(flag) {
+        for (flag, code) in modifiers.reversed() where heldFlags.contains(flag) {
             pressed.remove(flag)
             modifier(code, flags: pressed)
         }
     }
 
     private func modifier(_ key: CGKeyCode, flags: CGEventFlags) {
-        let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: !flags.isEmpty)
+        let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: key, keyDown: !flags.isEmpty)
         event?.type = .flagsChanged
         event?.flags = flags
         emit(event)

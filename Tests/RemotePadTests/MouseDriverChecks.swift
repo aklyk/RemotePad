@@ -27,6 +27,15 @@ struct MouseDriverChecks {
             check(events.map(\.type) == [.leftMouseDown, .leftMouseUp], "Normal click must remain left click after shortcut")
             check(events.allSatisfy { $0.flags.isEmpty }, "Normal click must never inherit Control or Command")
         }
+        for navigation: MouseCommand.Action in [.nextSpace, .previousSpace, .missionControl, .appWindows] {
+            events = []
+            driver.perform(MouseCommand(navigation))
+            let expected: CGEventFlags = [.maskControl, .maskSecondaryFn, .maskNumericPad]
+            check(events.map(\.type) == [.flagsChanged, .keyDown, .keyUp, .flagsChanged],
+                  "Arrow navigation presses and releases only the actual modifier")
+            check(events[0].flags == .maskControl && events[3].flags.isEmpty, "Control edges bracket navigation")
+            check(events[1].flags == expected && events[2].flags == expected, "Navigation arrows have hardware key flags")
+        }
         events = []
         driver.perform(MouseCommand(.rightClick))
         check(events.map(\.type) == [.rightMouseDown, .rightMouseUp], "Right click keeps its explicit button")
