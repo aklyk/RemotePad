@@ -45,6 +45,8 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
     private var vpnListener: NWListener?
     private var usbProxy: Process?
+    private var usbProbe: DirectConnection?
+    private var usbProbeTimeout: DispatchWorkItem?
     private var direct: DirectConnection?
     private var directOverUSB = false
     private var directStage = DirectStage.connecting
@@ -425,7 +427,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
 
     func startUSB() {
         guard accepting, usbProxy == nil else { return }
-        guard let executable = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
+        guard let iproxy = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
             .first(where: FileManager.default.isExecutableFile(atPath:)) else {
             usbStatus = "Install the USB helper with: brew install libusbmuxd"
             return
@@ -435,8 +437,13 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
             return
         }
         let proxy = Process()
-        proxy.executableURL = URL(fileURLWithPath: executable)
-        proxy.arguments = ["--local", "--source", "127.0.0.1", "\(Self.usbProxyPort.rawValue):\(DirectConnection.usbPort.rawValue)"]
+        if let relay = Bundle.main.url(forAuxiliaryExecutable: "RemotePadUSBRelay") {
+            proxy.executableURL = relay
+            proxy.arguments = [String(Self.usbProxyPort.rawValue), String(DirectConnection.usbPort.rawValue)]
+        } else {
+            proxy.executableURL = URL(fileURLWithPath: iproxy)
+            proxy.arguments = ["--local", "--source", "127.0.0.1", "\(Self.usbProxyPort.rawValue):\(DirectConnection.usbPort.rawValue)"]
+        }
         var environment = ProcessInfo.processInfo.environment
         environment.removeValue(forKey: "USBMUXD_SOCKET_ADDRESS")
         proxy.environment = environment
@@ -463,6 +470,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     private static let usbProxyPort: NWEndpoint.Port = 49375
 
     func stopUSB() {
+        usbProbe?.close()
         if directOverUSB { direct?.close() }
         let proxy = usbProxy
         usbProxy = nil
@@ -472,15 +480,38 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
 
     private func tryUSB() {
-        guard usbProxy?.isRunning == true, availableForController, let key = directKey() else { return }
+        guard usbProxy?.isRunning == true, usbProbe == nil, availableForController, let key = directKey() else { return }
         let connection = NWConnection(host: "127.0.0.1", port: Self.usbProxyPort,
-                                      using: DirectConnection.parameters(key: key))
-        startDirect(connection, overUSB: true)
+                                      using: DirectConnection.parameters(key: key, usb: true))
+        let candidate = DirectConnection(connection)
+        usbProbe = candidate
+        candidate.onClose = { [weak self] in self?.clearUSBProbe() }
+        candidate.onReady = { [weak self, weak candidate] in
+            guard let self, let candidate, self.usbProbe === candidate else { return }
+            self.clearUSBProbe()
+            guard self.availableForController else { candidate.close(); return }
+            self.acceptDirect(candidate, overUSB: true)
+        }
+        let timeout = DispatchWorkItem { [weak candidate] in candidate?.close() }
+        usbProbeTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+        candidate.start()
+    }
+
+    private func clearUSBProbe() {
+        usbProbeTimeout?.cancel()
+        usbProbeTimeout = nil
+        usbProbe = nil
     }
 
     private func startDirect(_ connection: NWConnection, overUSB: Bool) {
         guard availableForController else { connection.cancel(); return }
         let link = DirectConnection(connection)
+        acceptDirect(link, overUSB: overUSB)
+        link.start()
+    }
+
+    private func acceptDirect(_ link: DirectConnection, overUSB: Bool) {
         direct = link
         directOverUSB = overUSB
         directStage = .connecting
@@ -498,7 +529,6 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
             if overUSB, self.usbEnabled { self.usbStatus = "Waiting for RemotePad on the connected iPhone." }
         }
         setDirectTimeout(5)
-        link.start()
     }
 
     private func setDirectTimeout(_ seconds: Double) {

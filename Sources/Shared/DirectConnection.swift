@@ -16,7 +16,7 @@ public final class DirectConnection {
         self.connection = connection
     }
 
-    public static func parameters(key: String) -> NWParameters {
+    public static func parameters(key: String, usb: Bool = false) -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(options, .TLSv12)
@@ -30,11 +30,14 @@ public final class DirectConnection {
         sec_protocol_options_add_pre_shared_key(options, secret as __DispatchData, identity as __DispatchData)
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
+        // The USB proxy can coalesce small writes. Acknowledge those writes promptly
+        // so the proxy does not wait for TCP's ACK stretching timer.
+        tcp.disableAckStretching = usb
         return NWParameters(tls: tls, tcp: tcp)
     }
 
     public static func usbListener(key: String) throws -> NWListener {
-        let options = parameters(key: key)
+        let options = parameters(key: key, usb: true)
         options.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: usbPort)
         return try NWListener(using: options)
     }

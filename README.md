@@ -89,7 +89,7 @@ The official VPN client manages the tunnel. RemotePad connects to the address yo
 
 #### USB with Lightning or USB-C
 
-1. On the Mac, install the USB helper with `brew install libusbmuxd`. RemotePad uses `iproxy` from the standard Apple Silicon or Intel Homebrew path. [iproxy documentation](https://github.com/libimobiledevice/libusbmuxd/blob/master/docs/iproxy.1)
+1. On the Mac, install `libusbmuxd` with `brew install libusbmuxd`. The Mac app bundles a relay that uses the Homebrew library and disables TCP packet coalescing on the Mac-side socket. [libusbmuxd documentation](https://github.com/libimobiledevice/libusbmuxd)
 2. Connect one iPhone with a data-capable cable. Unlock it and confirm **Trust This Computer** if prompted.
 3. In RemotePad on Mac, click **Start USB**, then **Copy Connection Key**. In RemotePad on the iPhone, select **USB**, paste the key, and tap **Listen for Mac**. Approve the first connection on the Mac.
 
