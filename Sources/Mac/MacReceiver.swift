@@ -1,6 +1,7 @@
 import AppKit
 import MultipeerConnectivity
 import Combine
+import Network
 #if canImport(RemotePadCore)
 import RemotePadCore
 #endif
@@ -14,6 +15,11 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     @Published var lastAction = "Waiting for input"
     @Published var accepting = true
     @Published var rememberedPhones = UserDefaults.standard.stringArray(forKey: "trustedPhoneIDs")?.count ?? 0
+    @Published private(set) var vpnEnabled = UserDefaults.standard.bool(forKey: "allowVPN")
+    @Published private(set) var vpnStatus: String?
+    @Published private(set) var usbEnabled = false
+    @Published private(set) var usbStatus: String?
+    @Published private(set) var directKeyAvailable = false
     let computerName = Host.current().localizedName ?? "My Mac"
     private let driver = MouseDriver()
     private let macID = DeviceIdentity.identifier()
@@ -30,7 +36,19 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     private var invitation: ((Bool, MCSession?) -> Void)?
     private var invitationTimeout: DispatchWorkItem?
     private var permissionTimer: Timer?
+    private var terminationObserver: NSObjectProtocol?
     private var lastPacketAt = Date()
+    private enum DirectStage {
+        case connecting, awaitingApproval(DirectPairingRequest), verifying(PairingChallenge, phoneID: String), approved
+    }
+    private var vpnListener: NWListener?
+    private var usbProxy: Process?
+    private var direct: DirectConnection?
+    private var directOverUSB = false
+    private var directStage = DirectStage.connecting
+    private var directPhoneName = ""
+    private var directTimeout: DispatchWorkItem?
+    private let directKeyAccount = "directAccessKey"
 
     override init() {
         super.init()
@@ -49,6 +67,9 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: ["app": "RemotePad", "id": macID], serviceType: "remotepad")
         advertiser.delegate = self
         advertiser.startAdvertisingPeer()
+        updateRememberedCount()
+        directKeyAvailable = PairingKeychain.read(directKeyAccount) != nil
+        startVPN()
         status = "Ready to pair"
         permission = driver.permitted
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -60,7 +81,21 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
             }
             // Release a held mouse button even if the network fails silently.
             if Date().timeIntervalSince(self.lastPacketAt) > 6 { self.driver.release() }
+            if case .approved = self.directStage, Date().timeIntervalSince(self.lastPacketAt) > 10 {
+                self.direct?.close()
+            }
+            self.tryUSB()
         }
+        terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                                                      object: nil, queue: .main) { [weak self] _ in
+            self?.shutDown()
+        }
+    }
+
+    deinit {
+        if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
+        permissionTimer?.invalidate()
+        if let usbProxy, usbProxy.isRunning { usbProxy.terminate() }
     }
 
     func requestPermission() {
@@ -69,24 +104,23 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
 
     private func sendStatus() {
+        guard let data = try? JSONEncoder().encode(ReceiverStatus(mouseControlEnabled: permission)) else { return }
+        if case .approved = directStage { direct?.send(data) }
         let peers = session.connectedPeers.filter { approvedPeers.contains($0) }
-        guard !peers.isEmpty,
-              let data = try? JSONEncoder().encode(ReceiverStatus(mouseControlEnabled: permission)) else { return }
+        guard !peers.isEmpty else { return }
         try? session.send(data, toPeers: peers, with: .reliable)
     }
 
     func answer(_ allow: Bool) {
+        if case .awaitingApproval(let request) = directStage {
+            answerDirect(allow, request: request)
+            return
+        }
         invitationTimeout?.cancel()
         let handler = invitation
         if allow, let peer = pendingPeer { approvedPeers.insert(peer) }
-        if allow, let request = pendingRequest, let peer = pendingPeer,
-           let token = PairingKeychain.newToken(),
-           PairingKeychain.save(Data(token.utf8), account: "phone." + request.phoneID) {
-            var identifiers = Set(UserDefaults.standard.stringArray(forKey: "trustedPhoneIDs") ?? [])
-            identifiers.insert(request.phoneID)
-            UserDefaults.standard.set(Array(identifiers), forKey: "trustedPhoneIDs")
-            rememberedPhones = identifiers.count
-            grants[peer] = PairingGrant(macID: macID, name: computerName, token: token)
+        if allow, let request = pendingRequest, let peer = pendingPeer {
+            grants[peer] = issueGrant(for: request.phoneID, direct: false)
         }
         pendingRequest = nil
         pendingPeer = nil
@@ -98,16 +132,25 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
 
     func forgetPhones() {
+        stopUSB()
         disconnect()
-        for identifier in UserDefaults.standard.stringArray(forKey: "trustedPhoneIDs") ?? [] {
-            PairingKeychain.remove("phone." + identifier)
+        stopVPN()
+        for direct in [false, true] {
+            let list = trustedList(direct: direct)
+            for identifier in UserDefaults.standard.stringArray(forKey: list) ?? [] {
+                PairingKeychain.remove(phoneAccount(identifier, direct: direct))
+            }
+            UserDefaults.standard.removeObject(forKey: list)
         }
-        UserDefaults.standard.removeObject(forKey: "trustedPhoneIDs")
-        rememberedPhones = 0
+        PairingKeychain.remove(directKeyAccount)
+        directKeyAvailable = false
+        updateRememberedCount()
         grants.removeAll()
+        startVPN()
     }
 
     func disconnect() {
+        direct?.close()
         answer(false)
         driver.release()
         session.disconnect()
@@ -121,17 +164,30 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         status = accepting ? "Ready to pair" : "Paused"
     }
 
+    func shutDown() {
+        stopUSB()
+        stopVPN()
+        disconnect()
+    }
+
     func setAccepting(_ value: Bool) {
         accepting = value
-        if value { advertiser.startAdvertisingPeer(); status = "Ready to pair" }
-        else { advertiser.stopAdvertisingPeer(); disconnect() }
+        if value {
+            advertiser.startAdvertisingPeer()
+            startVPN()
+            status = "Ready to pair"
+        } else {
+            advertiser.stopAdvertisingPeer()
+            stopVPN()
+            stopUSB()
+            disconnect()
+        }
     }
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID,
                     withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         DispatchQueue.main.async {
-            guard self.accepting, !self.reserved, self.controller == nil, self.invitation == nil,
-                  self.session.connectedPeers.isEmpty else { invitationHandler(false, nil); return }
+            guard self.availableForController else { invitationHandler(false, nil); return }
             let request = PairingRequest.decode(context)
             if let request, request.automatic, request.macID == self.macID,
                PairingKeychain.read("phone." + request.phoneID) != nil {
@@ -161,6 +217,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
 
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         DispatchQueue.main.async {
+            guard self.approvedPeers.contains(peerID) || self.returningPhones[peerID] != nil else { return }
             switch state {
             case .connected:
                 if let phoneID = self.returningPhones[peerID] {
@@ -199,16 +256,20 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
 
     private func connectionReady(_ peer: MCPeerID) {
-        controller = peer.displayName
+        beginControl(peer.displayName)
+        if let grant = grants.removeValue(forKey: peer), let data = try? JSONEncoder().encode(grant) {
+            try? session.send(data, toPeers: [peer], with: .reliable)
+        }
+    }
+
+    private func beginControl(_ name: String) {
+        controller = name
         status = "Connected securely"
         receivedCommands = 0
         lastAction = "Waiting for input"
         lastPacketAt = Date()
         permission = driver.permitted
         sendStatus()
-        if let grant = grants.removeValue(forKey: peer), let data = try? JSONEncoder().encode(grant) {
-            try? session.send(data, toPeers: [peer], with: .reliable)
-        }
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
@@ -229,13 +290,252 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         guard let command = MouseCommand.decode(data) else { return }
         DispatchQueue.main.async {
             guard self.accepting, self.approvedPeers.contains(peerID), self.session.connectedPeers.contains(peerID) else { return }
-            self.lastPacketAt = Date()
-            if command.action == .heartbeat { self.sendStatus(); return }
-            self.receivedCommands += 1
-            self.driver.perform(command)
-            let navigation: [MouseCommand.Action: String] = [.nextSpace: "Next desktop space", .previousSpace: "Previous desktop space", .missionControl: "Mission Control", .appWindows: "Application windows"]
-            self.lastAction = self.permission ? (self.driver.lastIssue ?? navigation[command.action] ?? "Receiving input") : "Input blocked: enable Accessibility"
+            self.handleCommand(command)
         }
+    }
+
+    private func handleCommand(_ command: MouseCommand) {
+        lastPacketAt = Date()
+        if command.action == .heartbeat { sendStatus(); return }
+        receivedCommands += 1
+        driver.perform(command)
+        let navigation: [MouseCommand.Action: String] = [.nextSpace: "Next desktop space", .previousSpace: "Previous desktop space", .missionControl: "Mission Control", .appWindows: "Application windows"]
+        lastAction = permission ? (driver.lastIssue ?? navigation[command.action] ?? "Receiving input") : "Input blocked: enable Accessibility"
+    }
+
+    private var availableForController: Bool {
+        accepting && direct == nil && !reserved && controller == nil && invitation == nil && session.connectedPeers.isEmpty
+    }
+
+    private func trustedList(direct: Bool) -> String {
+        direct ? "trustedDirectPhoneIDs" : "trustedPhoneIDs"
+    }
+
+    private func phoneAccount(_ id: String, direct: Bool) -> String {
+        (direct ? "directPhone." : "phone.") + id
+    }
+
+    private func updateRememberedCount() {
+        rememberedPhones = [false, true].reduce(0) { count, direct in
+            count + (UserDefaults.standard.stringArray(forKey: trustedList(direct: direct))?.count ?? 0)
+        }
+    }
+
+    private func issueGrant(for phoneID: String, direct: Bool) -> PairingGrant? {
+        guard let token = PairingKeychain.newToken(),
+              PairingKeychain.save(Data(token.utf8), account: phoneAccount(phoneID, direct: direct)) else { return nil }
+        let list = trustedList(direct: direct)
+        var ids = Set(UserDefaults.standard.stringArray(forKey: list) ?? [])
+        ids.insert(phoneID)
+        UserDefaults.standard.set(Array(ids), forKey: list)
+        updateRememberedCount()
+        return PairingGrant(macID: macID, name: direct ? PeerNaming.displayName(computerName) : computerName, token: token)
+    }
+
+    private func directKey() -> String? {
+        guard let data = PairingKeychain.read(directKeyAccount),
+              let key = String(data: data, encoding: .utf8), PairingSecrets.isValidToken(key) else { return nil }
+        return key
+    }
+
+    private func prepareDirectKey() -> String? {
+        if let key = directKey() { return key }
+        guard let key = PairingKeychain.newToken(),
+              PairingKeychain.save(Data(key.utf8), account: directKeyAccount) else { return nil }
+        directKeyAvailable = true
+        return key
+    }
+
+    func copyDirectKey() {
+        guard let key = directKey() else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(key, forType: .string)
+    }
+
+    func setVPNEnabled(_ enabled: Bool) {
+        vpnEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "allowVPN")
+        if enabled { startVPN() }
+        else { stopVPN() }
+    }
+
+    private func startVPN() {
+        guard accepting, vpnEnabled, vpnListener == nil else { return }
+        guard let key = prepareDirectKey() else {
+            vpnStatus = "Could not save the connection key in Keychain."
+            return
+        }
+        do {
+            let listener = try NWListener(using: DirectConnection.parameters(key: key), on: DirectConnection.vpnPort)
+            vpnListener = listener
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, self.vpnListener === listener else { return }
+                switch state {
+                case .ready:
+                    self.vpnStatus = "Listening on TCP port \(DirectConnection.vpnPort.rawValue)."
+                case .failed(let error):
+                    self.stopVPN()
+                    self.vpnStatus = "Could not open the VPN listener: \(error.localizedDescription)"
+                default: break
+                }
+            }
+            listener.newConnectionHandler = { [weak self, weak listener] connection in
+                guard let self, let listener, self.vpnListener === listener else { connection.cancel(); return }
+                self.startDirect(connection, overUSB: false)
+            }
+            listener.start(queue: .main)
+        } catch {
+            vpnStatus = "Could not open the VPN listener: \(error.localizedDescription)"
+        }
+    }
+
+    private func stopVPN() {
+        if !directOverUSB { direct?.close() }
+        vpnListener?.cancel()
+        vpnListener = nil
+        vpnStatus = nil
+    }
+
+    func startUSB() {
+        guard accepting, usbProxy == nil else { return }
+        guard let executable = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
+            .first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            usbStatus = "Install the USB helper with: brew install libusbmuxd"
+            return
+        }
+        guard prepareDirectKey() != nil else {
+            usbStatus = "Could not save the connection key in Keychain."
+            return
+        }
+        let proxy = Process()
+        proxy.executableURL = URL(fileURLWithPath: executable)
+        proxy.arguments = ["--local", "--source", "127.0.0.1", "\(Self.usbProxyPort.rawValue):\(DirectConnection.usbPort.rawValue)"]
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "USBMUXD_SOCKET_ADDRESS")
+        proxy.environment = environment
+        proxy.standardOutput = FileHandle.nullDevice
+        proxy.standardError = FileHandle.nullDevice
+        proxy.terminationHandler = { [weak self] stopped in
+            DispatchQueue.main.async {
+                guard let self, self.usbProxy === stopped else { return }
+                self.stopUSB()
+                self.usbStatus = "The USB helper stopped. Check that local TCP port \(Self.usbProxyPort.rawValue) is free and try again."
+            }
+        }
+        do {
+            try proxy.run()
+            usbProxy = proxy
+            usbEnabled = true
+            usbStatus = "Waiting for RemotePad on the connected iPhone."
+            tryUSB()
+        } catch {
+            usbStatus = "Could not start the USB helper: \(error.localizedDescription)"
+        }
+    }
+
+    private static let usbProxyPort: NWEndpoint.Port = 49375
+
+    func stopUSB() {
+        if directOverUSB { direct?.close() }
+        let proxy = usbProxy
+        usbProxy = nil
+        if let proxy, proxy.isRunning { proxy.terminate() }
+        usbEnabled = false
+        usbStatus = nil
+    }
+
+    private func tryUSB() {
+        guard usbProxy?.isRunning == true, availableForController, let key = directKey() else { return }
+        let connection = NWConnection(host: "127.0.0.1", port: Self.usbProxyPort,
+                                      using: DirectConnection.parameters(key: key))
+        startDirect(connection, overUSB: true)
+    }
+
+    private func startDirect(_ connection: NWConnection, overUSB: Bool) {
+        guard availableForController else { connection.cancel(); return }
+        let link = DirectConnection(connection)
+        direct = link
+        directOverUSB = overUSB
+        directStage = .connecting
+        link.onMessage = { [weak self] message in self?.receiveDirect(message) }
+        link.onClose = { [weak self] in
+            guard let self else { return }
+            self.directTimeout?.cancel()
+            self.direct = nil
+            self.directStage = .connecting
+            self.directOverUSB = false
+            self.pendingName = nil
+            self.controller = nil
+            self.driver.release()
+            self.status = self.accepting ? "Ready to pair" : "Paused"
+            if overUSB, self.usbEnabled { self.usbStatus = "Waiting for RemotePad on the connected iPhone." }
+        }
+        setDirectTimeout(5)
+        link.start()
+    }
+
+    private func setDirectTimeout(_ seconds: Double) {
+        directTimeout?.cancel()
+        let work = DispatchWorkItem { [weak direct] in direct?.close() }
+        directTimeout = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func receiveDirect(_ message: Data) {
+        switch directStage {
+        case .connecting:
+            guard let request = DirectPairingRequest.decode(message) else { direct?.close(); return }
+            directPhoneName = request.name
+            if directOverUSB { usbStatus = "iPhone found over USB." }
+            if request.pairing.automatic {
+                authenticateDirect(request.pairing)
+            } else {
+                directStage = .awaitingApproval(request)
+                pendingName = request.name
+                setDirectTimeout(25)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        case .awaitingApproval:
+            direct?.close()
+        case .verifying(let challenge, let phoneID):
+            guard let proof = PairingProof.decode(message), proof.phoneID == phoneID,
+                  let token = directPhoneToken(phoneID),
+                  PairingSecrets.matches(proof.digest, PairingSecrets.proof(token: token, challenge: challenge, phoneID: phoneID))
+            else { direct?.close(); return }
+            approveDirect()
+        case .approved:
+            guard let command = MouseCommand.decode(message) else { return }
+            handleCommand(command)
+        }
+    }
+
+    private func directPhoneToken(_ id: String) -> String? {
+        PairingKeychain.read(phoneAccount(id, direct: true)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private func authenticateDirect(_ request: PairingRequest) {
+        guard request.macID == macID, let token = directPhoneToken(request.phoneID) else { direct?.close(); return }
+        let unsigned = PairingChallenge(macID: macID)
+        let challenge = PairingChallenge(macID: macID, nonce: unsigned.nonce,
+            serverProof: PairingSecrets.proof(token: token, challenge: unsigned, phoneID: request.phoneID, role: "mac"))
+        guard let data = try? JSONEncoder().encode(challenge) else { direct?.close(); return }
+        directStage = .verifying(challenge, phoneID: request.phoneID)
+        setDirectTimeout(5)
+        direct?.send(data)
+    }
+
+    private func answerDirect(_ allow: Bool, request: DirectPairingRequest) {
+        guard allow else { direct?.close(); return }
+        if let grant = issueGrant(for: request.pairing.phoneID, direct: true),
+           let data = try? JSONEncoder().encode(grant) { direct?.send(data) }
+        approveDirect()
+    }
+
+    private func approveDirect() {
+        directTimeout?.cancel()
+        pendingName = nil
+        directStage = .approved
+        beginControl(directPhoneName)
     }
     func session(_ session: MCSession, didReceive stream: InputStream, withName: String, fromPeer: MCPeerID) {}
     func session(_ session: MCSession, didStartReceivingResourceWithName: String, fromPeer: MCPeerID, with: Progress) {}

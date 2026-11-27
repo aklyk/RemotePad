@@ -43,23 +43,40 @@ struct RemotePadMacApp: App {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if receiver.rememberedPhones > 0 {
+                if receiver.rememberedPhones > 0 || receiver.directKeyAvailable {
                     HStack {
-                        Label("\(receiver.rememberedPhones) remembered iPhone(s)", systemImage: "iphone")
+                        Label("\(receiver.rememberedPhones) saved pairings", systemImage: "iphone")
                         Spacer()
                         Button("Forget All") { receiver.forgetPhones() }
                     }.font(.caption)
                 }
                 Toggle("Allow new connections", isOn: Binding(get: { receiver.accepting }, set: receiver.setAccepting))
-                Text("Keep this app open. Connect your iPhone to the same Wi-Fi, open RemotePad, and select this Mac. The first connection needs approval. Remembered iPhones reconnect automatically. Closing this window keeps RemotePad running in the menu bar.")
+                directConnections
+                Text("For Nearby, select this Mac from your iPhone on the same Wi-Fi. Keep this window open for the first approval. Closing the window keeps RemotePad running in the menu bar.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .padding(32).frame(width: 500).tint(.mint)
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in receiver.disconnect() }
         }.windowResizability(.contentSize)
         MenuBarExtra("RemotePad", systemImage: "cursorarrow.motionlines") {
             RemotePadMenu(receiver: receiver)
         }
+    }
+
+    private var directConnections: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Allow ZeroTier and NetBird connections",
+                   isOn: Binding(get: { receiver.vpnEnabled }, set: receiver.setVPNEnabled))
+            if let status = receiver.vpnStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+            HStack {
+                Button(receiver.usbEnabled ? "Stop USB" : "Start USB") {
+                    if receiver.usbEnabled { receiver.stopUSB() }
+                    else { receiver.startUSB() }
+                }
+                if receiver.directKeyAvailable { Button("Copy Connection Key") { receiver.copyDirectKey() } }
+            }
+            if let status = receiver.usbStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+        }
+        .disabled(!receiver.accepting)
     }
 }
 
@@ -75,6 +92,6 @@ private struct RemotePadMenu: View {
         Toggle("Allow connections", isOn: Binding(get: { receiver.accepting }, set: receiver.setAccepting))
         if receiver.controller != nil { Button("Disconnect & Pause") { receiver.setAccepting(false) } }
         Divider()
-        Button("Quit RemotePad") { receiver.disconnect(); NSApp.terminate(nil) }
+        Button("Quit RemotePad") { NSApp.terminate(nil) }
     }
 }

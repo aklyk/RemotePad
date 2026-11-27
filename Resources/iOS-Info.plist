@@ -27,7 +27,7 @@
 		<string>_remotepad._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>RemotePad connects your iPhone and Mac to control the mouse on your local network.</string>
+	<string>RemotePad uses the local network or a VPN address to connect to your Mac and control its mouse.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -14,6 +14,7 @@ struct RemotePadView: View {
     @AppStorage("naturalScrolling") private var naturalScrolling = true
     @AppStorage("gestureHaptics") private var gestureHaptics = true
     @State private var showSettings = false
+    @State private var directKey = ""
     @Environment(\.scenePhase) private var scenePhase
     private let mint = Color(red: 0.64, green: 0.96, blue: 0.77)
 
@@ -27,7 +28,7 @@ struct RemotePadView: View {
                             Image(systemName: "desktopcomputer").font(.title2).foregroundStyle(mint)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(name).font(.headline)
-                                Text(connection.mouseControlEnabled == false ? "Mouse access blocked on Mac" : "Connected securely")
+                                Text(connection.mouseControlEnabled == false ? "Mouse access blocked on Mac" : "\(connection.mode.label) · Connected securely")
                                     .font(.caption).foregroundStyle(connection.mouseControlEnabled == false ? Color.orange : Color.secondary)
                             }
                             Spacer()
@@ -67,7 +68,7 @@ struct RemotePadView: View {
                         Text(connection.dragging ? "Dragging · lift your finger or tap Release" : "Move · scroll · pinch · hold to drag")
                             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
-                        discovery.padding(.top, 24)
+                        connectionSetup.padding(.top, 24)
                     }
                 }.padding(24).frame(minHeight: geometry.size.height, alignment: .top)
             }.scrollDisabled(connection.connectedName != nil)
@@ -85,6 +86,7 @@ struct RemotePadView: View {
             UIApplication.shared.isIdleTimerDisabled = phase == .active && connection.connectedName != nil
         }
         .onChange(of: connection.connectedName) { name in UIApplication.shared.isIdleTimerDisabled = name != nil }
+        .onChange(of: connection.mode) { _ in directKey = "" }
     }
 
     private var header: some View {
@@ -116,6 +118,18 @@ struct RemotePadView: View {
             Trackpad(sensitivity: speed, naturalScrolling: naturalScrolling, haptics: gestureHaptics, dragging: $connection.dragging, send: connection.send)
         }.overlay(RoundedRectangle(cornerRadius: 30).stroke(mint.opacity(connection.dragging ? 0.65 : 0.15), lineWidth: 1))
     }
+    private var connectionSetup: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Picker("Connection", selection: Binding(get: { connection.mode }, set: connection.selectMode)) {
+                ForEach(ConnectionMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }.pickerStyle(.segmented).disabled(connection.connecting)
+            if connection.mode == .nearby { discovery }
+            else { directSetup }
+        }
+    }
+
     private var discovery: some View {
         VStack(alignment: .leading, spacing: 24) {
             ZStack {
@@ -152,6 +166,87 @@ struct RemotePadView: View {
             Label("Encrypted connection · remembers approved pairing", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
         }
     }
+
+    private var directSetup: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(connection.mode == .usb ? "Connect by cable" : "Connect over \(connection.mode.label)")
+                .font(.title2.bold())
+            if !connection.connecting {
+                directInstructions
+                if connection.mode != .usb {
+                    TextField("Mac VPN address", text: $connection.vpnAddress)
+                        .accessibilityLabel("Mac VPN address")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .textFieldStyle(.roundedBorder)
+                }
+                SecureField(connection.hasDirectKey ? "Enter a new connection key (optional)" : "Connection key from Mac",
+                            text: $directKey)
+                    .accessibilityLabel("Connection key from Mac")
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                Button(connection.mode == .usb ? "Listen for Mac" : "Connect") {
+                    if connection.connectDirect(keyInput: directKey, manual: true) { directKey = "" }
+                }.buttonStyle(.borderedProminent)
+            } else {
+                ProgressView()
+                Button("Cancel") { connection.disconnect() }
+            }
+            Text(connection.status).font(.callout).foregroundStyle(mint).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var directInstructions: some View {
+        if connection.mode == .usb {
+            Text("Use a Lightning or USB-C data cable and trust the Mac if asked. Click Start USB in RemotePad on the Mac, then copy its connection key.")
+                .foregroundStyle(.secondary)
+        } else {
+            Text("Connect both devices to the same \(connection.mode.label) network. On the Mac, enable VPN connections in RemotePad and copy the connection key.")
+                .foregroundStyle(.secondary)
+            if connection.mode == .zeroTier {
+                DisclosureGroup("Set up ZeroTier") {
+                    TextField("ZeroTier Network ID", text: $connection.zeroTierNetworkID)
+                        .accessibilityLabel("ZeroTier Network ID")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.top, 8)
+                    Button("Join in ZeroTier One") {
+                        if let url = zeroTierJoinURL {
+                            UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
+                                if !opened { UIApplication.shared.open(zeroTierStoreURL) }
+                            }
+                        }
+                    }.disabled(zeroTierJoinURL == nil)
+                    Button("Copy Network ID") {
+                        UIPasteboard.general.string = validZeroTierNetworkID
+                    }.disabled(validZeroTierNetworkID == nil)
+                    Link("Get ZeroTier One", destination: zeroTierStoreURL)
+                }
+            } else {
+                DisclosureGroup("Set up NetBird") {
+                    Text("Sign in to the same NetBird network on both devices. For a self-hosted network, enter its management URL in NetBird.")
+                        .foregroundStyle(.secondary).padding(.top, 8)
+                    Button("Open NetBird") {
+                        UIApplication.shared.open(URL(string: "netbird://")!) { opened in
+                            if !opened { UIApplication.shared.open(URL(string: "https://apps.apple.com/app/id6469329339")!) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private let zeroTierStoreURL = URL(string: "https://apps.apple.com/app/id1084101492")!
+    private var validZeroTierNetworkID: String? {
+        let id = connection.zeroTierNetworkID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard id.utf8.count == 16, id.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+        return id
+    }
+
+    private var zeroTierJoinURL: URL? {
+        guard let id = validZeroTierNetworkID else { return nil }
+        return URL(string: "https://joinzt.com/addnetwork?nwid=" + id)
+    }
     private func clickButton(_ title: String, icon: String, action: MouseCommand.Action) -> some View {
         Button { connection.send(MouseCommand(action)) } label: {
             VStack(spacing: 8) {
@@ -173,7 +268,7 @@ struct RemotePadView: View {
                         Label("Remembered: \(name)", systemImage: "desktopcomputer")
                         Button("Forget this Mac", role: .destructive) { connection.forgetMac() }
                     }
-                    Text("After the first approval, reconnects automatically when you reopen the app. iOS disconnects local peer sessions in the background; a force-closed app must be reopened.")
+                    Text("After the first approval, reconnects using the selected connection when you return to RemotePad.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Preferences") {

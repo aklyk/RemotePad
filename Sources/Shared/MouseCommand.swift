@@ -190,10 +190,10 @@ public enum PairingKeychain {
 }
 
 public enum DeviceIdentity {
-    public static func identifier(defaults: UserDefaults = .standard) -> String {
-        if let value = defaults.string(forKey: "deviceID"), UUID(uuidString: value) != nil { return value }
+    public static func identifier(defaults: UserDefaults = .standard, key: String = "deviceID") -> String {
+        if let value = defaults.string(forKey: key), UUID(uuidString: value) != nil { return value }
         let value = UUID().uuidString
-        defaults.set(value, forKey: "deviceID")
+        defaults.set(value, forKey: key)
         return value
     }
 }
