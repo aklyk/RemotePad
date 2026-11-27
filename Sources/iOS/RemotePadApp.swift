@@ -18,6 +18,7 @@ struct RemotePadView: View {
     @AppStorage("smartZoom") private var smartZoom = false
     @AppStorage("pageSwipes") private var pageSwipes = false
     @AppStorage("threeFingerDrag") private var threeFingerDrag = false
+    @AppStorage("dimLandscapeTrackpad") private var dimLandscapeTrackpad = true
     private enum SettingsPanel: String, Identifiable {
         case preferences, gestures
         var id: String { rawValue }
@@ -25,25 +26,33 @@ struct RemotePadView: View {
     @State private var settingsPanel: SettingsPanel?
     @State private var rotationHelp = false
     @State private var directKey = ""
+    @State private var trackpadBrightness = TrackpadBrightness()
     @Environment(\.scenePhase) private var scenePhase
     private let mint = Color(red: 0.64, green: 0.96, blue: 0.77)
 
     var body: some View {
         GeometryReader { geometry in
-            if let name = connection.connectedName {
-                let landscape = geometry.size.width > geometry.size.height
-                connectedTrackpad(name: name, landscape: landscape)
-                    .statusBarHidden(landscape)
-                    .persistentSystemOverlays(landscape ? .hidden : .automatic)
-                    .defersSystemGestures(on: landscape ? [.bottom, .leading, .trailing] : [])
-            } else {
-                ScrollView {
-                    VStack(spacing: 22) {
-                        header
-                        connectionSetup.padding(.top, 24)
-                    }.padding(24).frame(minHeight: geometry.size.height, alignment: .top)
+            let landscape = geometry.size.width > geometry.size.height
+            let shouldDim = dimLandscapeTrackpad && landscape && connection.connectedName != nil &&
+                scenePhase == .active && settingsPanel == nil
+            Group {
+                if let name = connection.connectedName {
+                    connectedTrackpad(name: name, landscape: landscape)
+                        .statusBarHidden(landscape)
+                        .persistentSystemOverlays(landscape ? .hidden : .automatic)
+                        .defersSystemGestures(on: landscape ? [.bottom, .leading, .trailing] : [])
+                } else {
+                    ScrollView {
+                        VStack(spacing: 22) {
+                            header
+                            connectionSetup.padding(.top, 24)
+                        }.padding(24).frame(minHeight: geometry.size.height, alignment: .top)
+                    }
                 }
             }
+            .onAppear { updateBrightness(shouldDim) }
+            .onChange(of: shouldDim) { updateBrightness($0) }
+            .onDisappear { trackpadBrightness.restore() }
         }
         .background(Color(red: 0.055, green: 0.065, blue: 0.075).ignoresSafeArea())
         .foregroundStyle(.white).tint(mint).preferredColorScheme(.dark)
@@ -64,6 +73,9 @@ struct RemotePadView: View {
         }
         .onChange(of: connection.connectedName) { name in UIApplication.shared.isIdleTimerDisabled = name != nil }
         .onChange(of: connection.mode) { _ in directKey = "" }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            trackpadBrightness.restore()
+        }
     }
 
     private var header: some View {
@@ -163,9 +175,17 @@ struct RemotePadView: View {
         }.accessibilityLabel(label)
     }
 
+    private var activeWindowScene: UIWindowScene? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+    }
+
+    private func updateBrightness(_ shouldDim: Bool) {
+        trackpadBrightness.update(screen: shouldDim ? activeWindowScene?.screen : nil)
+    }
+
     private func rotate(to orientation: UIInterfaceOrientationMask) {
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) else { return }
+        guard let scene = activeWindowScene else { return }
         connection.releaseDrag()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { _ in
             if orientation == .landscape { rotationHelp = true }
@@ -353,6 +373,7 @@ struct RemotePadView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Preferences") {
+                    Toggle("Dim landscape trackpad", isOn: $dimLandscapeTrackpad)
                     Toggle("Natural scrolling", isOn: $naturalScrolling)
                     Toggle("Gesture haptics", isOn: $gestureHaptics)
                     Toggle("Pinch to zoom", isOn: $pinchZoom)
@@ -404,5 +425,27 @@ struct RemotePadView: View {
                 Text("Update RemotePad on your Mac to use all gestures.")
             }
         }
+    }
+}
+
+@MainActor
+private final class TrackpadBrightness {
+    private var previous: (screen: UIScreen, brightness: CGFloat)?
+
+    func update(screen: UIScreen?) {
+        guard let screen else {
+            restore()
+            return
+        }
+        guard previous?.screen !== screen else { return }
+        restore()
+        previous = (screen, screen.brightness)
+        screen.brightness = 0
+    }
+
+    func restore() {
+        guard let previous else { return }
+        self.previous = nil
+        previous.screen.brightness = previous.brightness
     }
 }

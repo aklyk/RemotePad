@@ -79,6 +79,8 @@ Once connected, slide a finger across the large trackpad area. The iPhone keeps 
 
 Turn the iPhone sideways or tap the expand button after connecting to use the entire screen as a trackpad. The hand icon opens the gesture guide in landscape.
 
+The landscape trackpad dims the iPhone display to minimum brightness by default. RemotePad restores the previous brightness when you return to portrait or leave the full-screen trackpad. You can turn off **Dim landscape trackpad** under **Settings → Preferences**.
+
 #### ZeroTier or NetBird
 
 1. Install the VPN client on both devices. In the iPhone’s **ZeroTier** tab, expand **Set up ZeroTier**, enter your 16-character **Network ID**, and tap **Join in ZeroTier One**. Authorize the iPhone and Mac in ZeroTier Central. In the **NetBird** tab, open NetBird and sign both devices into the same network. For a self-hosted NetBird network, set its management URL in the NetBird client. [ZeroTier setup](https://docs.zerotier.com/quickstart/) · [NetBird setup](https://docs.netbird.io/get-started/install)
