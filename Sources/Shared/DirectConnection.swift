@@ -33,6 +33,12 @@ public final class DirectConnection {
         return NWParameters(tls: tls, tcp: tcp)
     }
 
+    public static func usbListener(key: String) throws -> NWListener {
+        let options = parameters(key: key)
+        options.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: usbPort)
+        return try NWListener(using: options)
+    }
+
     public func start() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }

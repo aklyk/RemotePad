@@ -410,10 +410,8 @@ final class PhoneConnection: NSObject, ObservableObject, MCSessionDelegate, MCNe
     }
 
     private func startUSBListener(key: String) {
-        let parameters = DirectConnection.parameters(key: key)
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: DirectConnection.usbPort)
         do {
-            let listener = try NWListener(using: parameters, on: DirectConnection.usbPort)
+            let listener = try DirectConnection.usbListener(key: key)
             directListener = listener
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self, let listener, self.directListener === listener else { return }
