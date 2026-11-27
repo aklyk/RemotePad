@@ -12,7 +12,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     @Published var controller: String?
     @Published var pendingName: String?
     @Published var permission = false
-    @Published var receivedCommands = 0
+    @Published private(set) var receivedCommands = 0
     @Published var lastAction = "Waiting for input"
     @Published var accepting = true
     @Published var rememberedPhones = UserDefaults.standard.stringArray(forKey: "trustedPhoneIDs")?.count ?? 0
@@ -39,6 +39,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     private var permissionTimer: Timer?
     private var terminationObserver: NSObjectProtocol?
     private var lastPacketAt = Date()
+    private var commandCount = 0
     private enum DirectStage {
         case connecting, awaitingApproval(DirectPairingRequest), verifying(PairingChallenge, phoneID: String), approved
     }
@@ -75,6 +76,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         permission = driver.permitted
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
+            if self.receivedCommands != self.commandCount { self.receivedCommands = self.commandCount }
             let allowed = self.driver.permitted
             if self.permission != allowed {
                 self.permission = allowed
@@ -266,6 +268,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     private func beginControl(_ name: String) {
         controller = name
         status = "Connected securely"
+        commandCount = 0
         receivedCommands = 0
         lastAction = "Waiting for input"
         lastPacketAt = Date()
@@ -299,21 +302,23 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
         lastPacketAt = Date()
         if command.action == .heartbeat { sendStatus(); return }
         if command.action == .stopScroll { driver.perform(command); return }
-        receivedCommands += 1
+        commandCount += 1
         driver.perform(command)
         if NavigationShortcut.identifier(for: command.action) != nil {
             let result = !permission ? "accessibility-blocked" : driver.lastIssue ?? "sent"
             Self.gestureLog.notice("Navigation \(command.action.rawValue, privacy: .public): \(result, privacy: .public)")
         }
-        if let issue = driver.lastIssue { lastAction = issue }
-        else if !permission { lastAction = "Input blocked: enable Accessibility" }
-        else if let gesture = Self.gestureNames[command.action] { lastAction = gesture }
+        let action: String
+        if let issue = driver.lastIssue { action = issue }
+        else if !permission { action = "Input blocked: enable Accessibility" }
+        else if let gesture = Self.gestureNames[command.action] { action = gesture }
         else {
             switch command.action {
-            case .move, .leftClick, .rightClick, .doubleClick, .dragStart: lastAction = "Receiving input"
-            default: break
+            case .move, .leftClick, .rightClick, .doubleClick, .dragStart: action = "Receiving input"
+            default: return
             }
         }
+        if lastAction != action { lastAction = action }
     }
 
     private static let gestureLog = Logger(subsystem: "com.remotepad.mac", category: "Gestures")
