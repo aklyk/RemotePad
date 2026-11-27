@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 #if canImport(RemotePadCore)
 import RemotePadCore
 #endif
@@ -20,12 +21,9 @@ struct Trackpad: UIViewRepresentable {
         move.minimumNumberOfTouches = 1
         move.maximumNumberOfTouches = 1
         coordinator.moveRecognizer = move
-        let scroll = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.scroll(_:)))
-        scroll.minimumNumberOfTouches = 2
-        scroll.maximumNumberOfTouches = 2
-        coordinator.scrollRecognizer = scroll
-        let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.pinch(_:)))
-        coordinator.pinchRecognizer = pinch
+        let twoFinger = TwoFingerGestureRecognizer(target: coordinator, action: #selector(Coordinator.twoFinger(_:)))
+        twoFinger.naturalScrolling = naturalScrolling
+        coordinator.twoFingerRecognizer = twoFinger
         let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.hold(_:)))
         hold.minimumPressDuration = 0.4
         hold.allowableMovement = 14
@@ -46,7 +44,7 @@ struct Trackpad: UIViewRepresentable {
         reset.numberOfTapsRequired = 2
         right.require(toFail: reset)
         tap.require(toFail: right)
-        for recognizer in [move, scroll, pinch, hold, spaces, tap, double, right, reset] {
+        for recognizer: UIGestureRecognizer in [move, twoFinger, hold, spaces, tap, double, right, reset] {
             recognizer.delegate = coordinator
             view.addGestureRecognizer(recognizer)
         }
@@ -59,15 +57,17 @@ struct Trackpad: UIViewRepresentable {
         ]
         return view
     }
-    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.twoFingerRecognizer?.naturalScrolling = naturalScrolling
+    }
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) { coordinator.endHold() }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: Trackpad
         weak var moveRecognizer: UIPanGestureRecognizer?
-        weak var scrollRecognizer: UIPanGestureRecognizer?
-        weak var pinchRecognizer: UIPinchGestureRecognizer?
+        weak var twoFingerRecognizer: TwoFingerGestureRecognizer?
         weak var holdRecognizer: UILongPressGestureRecognizer?
         weak var spacesRecognizer: UIPanGestureRecognizer?
         private var navigationStroke = NavigationStroke()
@@ -75,9 +75,6 @@ struct Trackpad: UIViewRepresentable {
             spacesRecognizer?.state == .began || spacesRecognizer?.state == .changed
         }
         private var ownsDrag = false
-        private var pinchConsumed = false
-        private var lastPinchScale = 1.0
-        private var zoom = ZoomAccumulator()
         private let feedback = UISelectionFeedbackGenerator()
 
         init(_ parent: Trackpad) { self.parent = parent }
@@ -88,38 +85,21 @@ struct Trackpad: UIViewRepresentable {
             // A second finger may have started scrolling before the third lands.
             // Let navigation recognize, then suppress lower-finger actions below.
             if pair.contains(where: { $0 === spacesRecognizer }) { return true }
-            return (pair.contains { $0 === holdRecognizer } && pair.contains { $0 === moveRecognizer }) ||
-                   (pair.contains { $0 === pinchRecognizer } && pair.contains { $0 === scrollRecognizer })
+            return pair.contains { $0 === moveRecognizer } &&
+                   pair.contains { $0 === holdRecognizer || $0 === twoFingerRecognizer }
         }
         @objc func move(_ gesture: UIPanGestureRecognizer) {
             defer { gesture.setTranslation(.zero, in: gesture.view) }
-            guard gesture.state == .changed, gesture.numberOfTouches == 1, !isNavigating else { return }
+            guard gesture.state == .began || gesture.state == .changed,
+                  gesture.numberOfTouches == 1, !isNavigating else { return }
             let delta = gesture.translation(in: gesture.view)
+            guard delta != .zero else { return }
             parent.send(MouseCommand(.move, x: bounded(Double(delta.x) * parent.sensitivity), y: bounded(Double(delta.y) * parent.sensitivity)))
         }
-        @objc func scroll(_ gesture: UIPanGestureRecognizer) {
-            defer { gesture.setTranslation(.zero, in: gesture.view) }
-            if gesture.state == .began {
-                pinchConsumed = pinchRecognizer?.state == .began || pinchRecognizer?.state == .changed
-            }
-            guard gesture.state == .changed, gesture.numberOfTouches == 2, !isNavigating, !parent.dragging, !pinchConsumed,
-                  pinchRecognizer?.state != .began, pinchRecognizer?.state != .changed else { return }
-            let delta = gesture.translation(in: gesture.view)
-            let direction = parent.naturalScrolling ? 2.0 : -2.0
-            parent.send(MouseCommand(.scroll, x: bounded(Double(delta.x) * direction), y: bounded(Double(delta.y) * direction)))
-        }
-        @objc func pinch(_ gesture: UIPinchGestureRecognizer) {
-            guard !parent.dragging, !isNavigating, gesture.numberOfTouches == 2 else { return }
-            if gesture.state == .began {
-                pinchConsumed = true
-                lastPinchScale = 1
-                zoom = ZoomAccumulator()
-            }
-            guard gesture.state == .began || gesture.state == .changed else { return }
-            let scale = Double(gesture.scale)
-            let steps = zoom.consume(scale / lastPinchScale)
-            lastPinchScale = scale
-            for _ in 0..<abs(steps) { parent.send(MouseCommand(steps > 0 ? .zoomIn : .zoomOut)) }
+        @objc func twoFinger(_ gesture: TwoFingerGestureRecognizer) {
+            guard gesture.state == .began || gesture.state == .changed,
+                  !parent.dragging, !isNavigating else { return }
+            gesture.commands.forEach(parent.send)
         }
         @objc func hold(_ gesture: UILongPressGestureRecognizer) {
             switch gesture.state {
@@ -162,5 +142,56 @@ struct Trackpad: UIViewRepresentable {
         @objc func accessibleRightClick() -> Bool { parent.send(MouseCommand(.rightClick)); return true }
         private func tick() { if parent.haptics { feedback.selectionChanged() } }
         private func bounded(_ value: Double) -> Double { min(max(value, -2000), 2000) }
+    }
+}
+
+final class TwoFingerGestureRecognizer: UIGestureRecognizer {
+    var naturalScrolling = true
+    private(set) var commands: [MouseCommand] = []
+    private var activeTouches: Set<UITouch> = []
+    private var motion: TwoFingerMotion?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        activeTouches.formUnion(touches)
+        if activeTouches.count > 2 {
+            state = state == .possible ? .failed : .cancelled
+        } else if let (center, span) = measurement {
+            motion = TwoFingerMotion(center: center, span: span)
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        guard let (center, span) = measurement, var motion else { return }
+        commands = motion.consume(center: center, span: span, naturalScrolling: naturalScrolling)
+        self.motion = motion
+        if motion.mode != .undecided { state = state == .possible ? .began : .changed }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesEnded(touches, with: event)
+        activeTouches.subtract(touches)
+        state = state == .possible ? .failed : .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesCancelled(touches, with: event)
+        state = state == .possible ? .failed : .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        activeTouches.removeAll()
+        commands.removeAll()
+        motion = nil
+    }
+
+    private var measurement: (CGPoint, Double)? {
+        guard activeTouches.count == 2, let view else { return nil }
+        let locations = activeTouches.map { $0.location(in: view) }
+        let first = locations[0], second = locations[1]
+        let center = CGPoint(x: (first.x + second.x) / 2, y: (first.y + second.y) / 2)
+        return (center, hypot(Double(first.x - second.x), Double(first.y - second.y)))
     }
 }

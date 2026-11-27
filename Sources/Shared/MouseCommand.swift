@@ -47,6 +47,48 @@ public struct ZoomAccumulator {
     }
 }
 
+public struct TwoFingerMotion {
+    public enum Mode { case undecided, scroll, zoom }
+    public private(set) var mode = Mode.undecided
+    private var previousCenter: CGPoint
+    private var previousSpan: Double
+    private var zoom = ZoomAccumulator()
+
+    public init(center: CGPoint, span: Double) {
+        previousCenter = center
+        previousSpan = max(span, 1)
+    }
+
+    public mutating func consume(center: CGPoint, span: Double, naturalScrolling: Bool) -> [MouseCommand] {
+        let span = max(span, 1)
+        let x = Double(center.x - previousCenter.x)
+        let y = Double(center.y - previousCenter.y)
+        if mode == .undecided {
+            let translation = hypot(x, y)
+            let spanChange = abs(span - previousSpan)
+            if spanChange >= 10 && spanChange >= translation {
+                mode = .zoom
+            } else if translation >= 8 && translation > spanChange {
+                mode = .scroll
+            }
+        }
+        switch mode {
+        case .undecided:
+            return []
+        case .scroll:
+            previousCenter = center
+            let multiplier = naturalScrolling ? 2.0 : -2.0
+            guard x != 0 || y != 0 else { return [] }
+            return [MouseCommand(.scroll, x: min(max(x * multiplier, -2000), 2000),
+                                 y: min(max(y * multiplier, -2000), 2000))]
+        case .zoom:
+            let steps = zoom.consume(span / previousSpan)
+            previousSpan = span
+            return Array(repeating: MouseCommand(steps > 0 ? .zoomIn : .zoomOut), count: abs(steps))
+        }
+    }
+}
+
 public enum TrackpadNavigation {
     public static func action(x: Double, y: Double) -> MouseCommand.Action? {
         guard x.isFinite, y.isFinite, max(abs(x), abs(y)) >= 45 else { return nil }

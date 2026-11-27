@@ -33,6 +33,18 @@ struct ProtocolChecks {
         check(zoom.consume(1.15) == 1, "Accumulated pinch should zoom in")
         check(zoom.consume(0.75) == -1, "Pinch reversal should zoom out")
         check(zoom.consume(.infinity) == 0 && zoom.consume(0) == 0 && zoom.consume(-1) == 0, "Invalid pinch scale")
+        var twoFingerScroll = TwoFingerMotion(center: .zero, span: 100)
+        check(twoFingerScroll.consume(center: CGPoint(x: 2, y: 2), span: 104, naturalScrolling: true).isEmpty,
+              "A two-finger tap can move slightly without becoming a scroll or pinch")
+        check(twoFingerScroll.consume(center: CGPoint(x: 0, y: 12), span: 107, naturalScrolling: true) ==
+              [MouseCommand(.scroll, y: 24)], "Two-finger scroll survives changes in finger spacing")
+        check(twoFingerScroll.consume(center: CGPoint(x: 2, y: 20), span: 130, naturalScrolling: false) ==
+              [MouseCommand(.scroll, x: -4, y: -16)], "A scroll stays a scroll and honors reversed scrolling")
+        var twoFingerPinch = TwoFingerMotion(center: .zero, span: 100)
+        check(twoFingerPinch.consume(center: CGPoint(x: 1, y: 2), span: 125, naturalScrolling: true) ==
+              [MouseCommand(.zoomIn)], "Spreading fingers zooms without scrolling")
+        check(twoFingerPinch.consume(center: CGPoint(x: 24, y: 36), span: 95, naturalScrolling: true) ==
+              [MouseCommand(.zoomOut)], "A pinch stays a pinch when its center moves")
         check(TrackpadNavigation.action(x: 12, y: 20) == nil, "Short swipe should do nothing")
         check(TrackpadNavigation.action(x: -70, y: 10) == .nextSpace, "Left swipe")
         check(TrackpadNavigation.action(x: 70, y: 10) == .previousSpace, "Right swipe")
