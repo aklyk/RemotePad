@@ -32,6 +32,7 @@ final class PhoneConnection: NSObject, ObservableObject, MCSessionDelegate, MCNe
     @Published var connecting = false
     @Published var dragging = false
     @Published var mouseControlEnabled: Bool?
+    @Published private(set) var enhancedGestures = false
     @Published var rememberedMacName: String?
     @Published private(set) var mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .nearby
     @Published var vpnAddress = "" {
@@ -164,6 +165,7 @@ final class PhoneConnection: NSObject, ObservableObject, MCSessionDelegate, MCNe
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         mouseControlEnabled = nil
+        enhancedGestures = false
         targetPeer = nil
         pendingMacID = nil
         connectedName = nil
@@ -301,6 +303,7 @@ final class PhoneConnection: NSObject, ObservableObject, MCSessionDelegate, MCNe
                 self.heartbeatTimer?.invalidate()
                 self.heartbeatTimer = nil
                 self.mouseControlEnabled = nil
+                self.enhancedGestures = false
                 self.connectedName = nil
                 self.connecting = false
                 self.dragging = false
@@ -344,6 +347,7 @@ final class PhoneConnection: NSObject, ObservableObject, MCSessionDelegate, MCNe
         connectedName = name
         connecting = false
         mouseControlEnabled = receiver.mouseControlEnabled
+        enhancedGestures = receiver.trackpadGestures == true
         status = "Connected securely"
         retryCount = 0
         lastDirectStatusAt = Date()

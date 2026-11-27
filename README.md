@@ -116,19 +116,28 @@ VPN and USB use TLS with the Mac’s randomly generated connection key. Share th
 
 | Gesture or control | Result |
 | --- | --- |
-| One-finger swipe | Move the pointer |
+| One-finger swipe | Move the pointer with speed-based acceleration |
 | Tap / double-tap | Click / double-click |
 | Two-finger tap | Right-click |
-| Two-finger swipe | Scroll horizontally or vertically |
+| Two-finger swipe | Scroll horizontally or vertically, with momentum on lift |
 | Hold for 0.4 seconds, move, then lift | Drag and release |
 | Drag button → swipe → Release | Keep a drag held across several swipes |
-| Pinch out / in | Zoom in / out |
-| Two-finger double-tap | Reset zoom |
-| Three-finger swipe left / right | Next / previous desktop space |
-| Three-finger swipe up / down | Mission Control / application windows |
+| Two-finger pinch | Zoom in compatible Mac apps when **Pinch to zoom** is enabled |
+| Two-finger double-tap | Smart Zoom in compatible Mac apps when **Smart Zoom** is enabled |
+| Two-finger twist | Rotate in compatible Mac apps |
+| Two fingers from the right edge | Show Notification Center |
+| Two-finger horizontal swipe with **Two-finger page swipes** on | Previous or next page in compatible Mac apps |
+| Three-finger tap | Look up a word in the active app |
+| Three-finger slide with **Three-finger drag** on | Drag and release on lift |
+| Three- or four-finger swipe left / right | Next / previous desktop space |
+| Three- or four-finger swipe up / down | Mission Control / application windows |
+| Spread four fingers | Show the desktop |
+| Pinch four fingers | Open Apps or Launchpad |
 | Sliders icon or Gesture guide | Preferences and gesture reference |
 
-**Compatibility:** zoom sends Command-plus/minus/zero to the active Mac app. The app must support those shortcuts. Space and window navigation reads your configured Mission Control shortcuts, including custom modifier keys; enable these in **System Settings → Keyboard → Keyboard Shortcuts → Mission Control** if needed. Space switching requires another desktop space. Mac shortcuts and keyboard layouts can affect these actions.
+**Settings.** **Pinch to zoom** and **Smart Zoom** are off by default. Enable them separately in **Settings → Preferences**. Pointer acceleration is on by default and can be toggled under **Pointer speed**. When **Three-finger drag** is on, use four fingers for navigation. **Two-finger page swipes** is off by default so a horizontal swipe scrolls.
+
+**Compatibility.** Update both apps for all gestures. The Mac app uses the active app’s trackpad support for Smart Zoom, pinch, and rotation. Navigation respects your configured Mac shortcuts, including custom modifier keys. Space switching requires another desktop space. The iPhone provides optional vibration for gesture feedback. Force Touch pressure and Apple’s trackpad hardware haptics require a physical trackpad.
 
 ## Troubleshooting
 

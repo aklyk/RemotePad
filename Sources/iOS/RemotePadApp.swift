@@ -11,8 +11,13 @@ struct RemotePadApp: App {
 struct RemotePadView: View {
     @StateObject private var connection = PhoneConnection()
     @AppStorage("pointerSpeed") private var speed = 1.5
+    @AppStorage("pointerAcceleration") private var acceleration = true
     @AppStorage("naturalScrolling") private var naturalScrolling = true
     @AppStorage("gestureHaptics") private var gestureHaptics = true
+    @AppStorage("pinchZoom") private var pinchZoom = false
+    @AppStorage("smartZoom") private var smartZoom = false
+    @AppStorage("pageSwipes") private var pageSwipes = false
+    @AppStorage("threeFingerDrag") private var threeFingerDrag = false
     private enum SettingsPanel: String, Identifiable {
         case preferences, gestures
         var id: String { rawValue }
@@ -183,7 +188,10 @@ struct RemotePadView: View {
                 Text(connection.dragging ? "Dragging" : "Move with one finger · Scroll with two")
                     .font(.caption.weight(.medium))
             }.foregroundStyle(mint.opacity(0.5)).allowsHitTesting(false)
-            Trackpad(sensitivity: speed, naturalScrolling: naturalScrolling, haptics: gestureHaptics, dragging: $connection.dragging, send: connection.send)
+            Trackpad(sensitivity: speed, accelerationEnabled: acceleration, naturalScrolling: naturalScrolling,
+                     pinchZoom: pinchZoom, smartZoom: smartZoom, pageSwipes: pageSwipes, threeFingerDrag: threeFingerDrag,
+                     enhancedGestures: connection.enhancedGestures, haptics: gestureHaptics,
+                     dragging: $connection.dragging, send: connection.send)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.overlay {
             if !fullScreen { shape.stroke(mint.opacity(connection.dragging ? 0.65 : 0.15), lineWidth: 1).allowsHitTesting(false) }
@@ -333,6 +341,7 @@ struct RemotePadView: View {
                 Section("Pointer speed") {
                     Slider(value: $speed, in: 0.5...3, step: 0.1)
                     Text(String(format: "%.1f×", speed)).foregroundStyle(.secondary)
+                    Toggle("Pointer acceleration", isOn: $acceleration)
                 }
                 Section("Connection") {
                     Toggle("Automatically reconnect", isOn: $connection.autoReconnect)
@@ -346,6 +355,10 @@ struct RemotePadView: View {
                 Section("Preferences") {
                     Toggle("Natural scrolling", isOn: $naturalScrolling)
                     Toggle("Gesture haptics", isOn: $gestureHaptics)
+                    Toggle("Pinch to zoom", isOn: $pinchZoom)
+                    Toggle("Smart Zoom", isOn: $smartZoom)
+                    Toggle("Two-finger page swipes", isOn: $pageSwipes)
+                    Toggle("Three-finger drag", isOn: $threeFingerDrag)
                 }
                 if panel == .preferences { gestureGuide }
                 Section("Connection help") {
@@ -367,16 +380,29 @@ struct RemotePadView: View {
         Section("Two fingers") {
             Label("Slide together to scroll", systemImage: "arrow.up.arrow.down")
             Label("Tap to right-click", systemImage: "hand.tap")
-            Label("Pinch to zoom", systemImage: "arrow.up.left.and.arrow.down.right")
-            Label("Double-tap to reset zoom", systemImage: "arrow.counterclockwise")
+            Label(smartZoom ? "Double-tap for Smart Zoom" : "Enable Smart Zoom in Preferences",
+                  systemImage: "plus.magnifyingglass")
+            Label(pinchZoom ? "Pinch to zoom" : "Enable Pinch to zoom in Preferences", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label("Twist to rotate", systemImage: "rotate.right")
+            Label("Swipe left from the right edge for Notification Center", systemImage: "bell")
+            if pageSwipes { Label("Swipe horizontally to go back or forward", systemImage: "arrow.left.and.right") }
         }
         Section("Three fingers") {
-            Label("Swipe left or right to switch spaces", systemImage: "rectangle.split.3x1")
-            Label("Swipe up to open Mission Control", systemImage: "rectangle.3.group")
-            Label("Swipe down to show app windows", systemImage: "macwindow.on.rectangle")
+            Label("Tap to look up a word", systemImage: "text.magnifyingglass")
+            if threeFingerDrag {
+                Label("Slide to drag. Lift to release.", systemImage: "hand.draw")
+            }
         }
-        Section("Gesture compatibility") {
-            Text("Zoom uses ⌘+ / ⌘− / ⌘0 in the active Mac app. Navigation uses your Mac’s Keyboard Shortcuts → Mission Control settings.")
+        Section(threeFingerDrag ? "Four fingers" : "Three or four fingers") {
+            Label("Swipe horizontally to switch spaces", systemImage: "rectangle.split.3x1")
+            Label("Swipe up for Mission Control, down for app windows", systemImage: "macwindow.on.rectangle")
+            Label("Spread four fingers to show the desktop", systemImage: "macwindow")
+            Label("Pinch four fingers to show apps", systemImage: "square.grid.3x3")
+        }
+        if connection.connectedName != nil && !connection.enhancedGestures {
+            Section {
+                Text("Update RemotePad on your Mac to use all gestures.")
+            }
         }
     }
 }

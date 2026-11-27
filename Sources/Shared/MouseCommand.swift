@@ -1,9 +1,12 @@
 import Foundation
+import CoreGraphics
 
 public struct MouseCommand: Codable, Equatable {
     public enum Action: String, Codable, CaseIterable {
         case move, scroll, leftClick, rightClick, doubleClick, dragStart, dragEnd, heartbeat
         case zoomIn, zoomOut, resetZoom, previousSpace, nextSpace, missionControl, appWindows
+        case scrollStart, scrollEnd, stopScroll, magnifyStart, magnify, magnifyEnd, rotateStart, rotate, rotateEnd
+        case smartZoom, previousPage, nextPage, notificationCenter, lookUp, showDesktop, showApplications
     }
     public let action: Action
     public let x: Double
@@ -48,44 +51,141 @@ public struct ZoomAccumulator {
 }
 
 public struct TwoFingerMotion {
-    public enum Mode { case undecided, scroll, zoom }
+    public enum Mode { case undecided, scroll, zoom, rotate, completed }
     public private(set) var mode = Mode.undecided
     private var previousCenter: CGPoint
     private var previousSpan: Double
-    private var zoom = ZoomAccumulator()
+    private var previousAngle: Double
+    private let notificationEdge: Bool
+    private let pageSwipes: Bool
+    private let pinchZoom: Bool
 
-    public init(center: CGPoint, span: Double) {
+    public init(center: CGPoint, span: Double, angle: Double = 0, notificationEdge: Bool = false,
+                pageSwipes: Bool = false, pinchZoom: Bool = false) {
         previousCenter = center
         previousSpan = max(span, 1)
+        previousAngle = angle
+        self.notificationEdge = notificationEdge
+        self.pageSwipes = pageSwipes
+        self.pinchZoom = pinchZoom
     }
 
-    public mutating func consume(center: CGPoint, span: Double, naturalScrolling: Bool) -> [MouseCommand] {
+    public mutating func consume(center: CGPoint, span: Double, angle: Double = 0, naturalScrolling: Bool) -> [MouseCommand] {
         let span = max(span, 1)
         let x = Double(center.x - previousCenter.x)
         let y = Double(center.y - previousCenter.y)
+        let angleDelta = atan2(sin(angle - previousAngle), cos(angle - previousAngle))
+        let wasUndecided = mode == .undecided
         if mode == .undecided {
             let translation = hypot(x, y)
             let spanChange = abs(span - previousSpan)
-            if spanChange >= 10 && spanChange >= translation {
+            let rotationTravel = abs(angleDelta) * previousSpan / 2
+            if spanChange >= 10 && spanChange >= translation && spanChange >= rotationTravel {
+                guard pinchZoom else {
+                    previousSpan = span
+                    return []
+                }
                 mode = .zoom
+            } else if abs(angleDelta) >= 0.12 && rotationTravel >= translation && rotationTravel >= spanChange {
+                mode = .rotate
+            } else if abs(x) > 1.5 * abs(y) && (pageSwipes || (notificationEdge && x < 0)) {
+                guard abs(x) >= (notificationEdge && x < 0 ? 34 : 48) else { return [] }
+                mode = .completed
+                if notificationEdge && x < 0 { return [MouseCommand(.notificationCenter)] }
+                return [MouseCommand(x > 0 ? .previousPage : .nextPage)]
             } else if translation >= 8 && translation > spanChange {
                 mode = .scroll
             }
         }
         switch mode {
-        case .undecided:
+        case .undecided, .completed:
             return []
         case .scroll:
             previousCenter = center
             let multiplier = naturalScrolling ? 2.0 : -2.0
             guard x != 0 || y != 0 else { return [] }
-            return [MouseCommand(.scroll, x: min(max(x * multiplier, -2000), 2000),
-                                 y: min(max(y * multiplier, -2000), 2000))]
+            let scroll = MouseCommand(.scroll, x: min(max(x * multiplier, -2000), 2000),
+                                      y: min(max(y * multiplier, -2000), 2000))
+            return wasUndecided ? [MouseCommand(.scrollStart), scroll] : [scroll]
         case .zoom:
-            let steps = zoom.consume(span / previousSpan)
+            let delta = min(max(span / previousSpan - 1, -0.5), 1)
             previousSpan = span
-            return Array(repeating: MouseCommand(steps > 0 ? .zoomIn : .zoomOut), count: abs(steps))
+            let magnify = MouseCommand(.magnify, x: delta)
+            return wasUndecided ? [MouseCommand(.magnifyStart), magnify] : [magnify]
+        case .rotate:
+            previousAngle = angle
+            let rotate = MouseCommand(.rotate, x: -angleDelta * 180 / .pi)
+            return wasUndecided ? [MouseCommand(.rotateStart), rotate] : [rotate]
         }
+    }
+
+    public func end(velocity: CGPoint = .zero) -> [MouseCommand] {
+        switch mode {
+        case .scroll: return [MouseCommand(.scrollEnd, x: Double(velocity.x), y: Double(velocity.y))]
+        case .zoom: return [MouseCommand(.magnifyEnd)]
+        case .rotate: return [MouseCommand(.rotateEnd)]
+        case .undecided, .completed: return []
+        }
+    }
+}
+
+public struct PointerAcceleration {
+    private var speed: Double?
+
+    public init() {}
+
+    public mutating func apply(to delta: CGPoint, elapsed: Double) -> CGPoint {
+        let interval = min(max(elapsed, 1.0 / 240), 0.1)
+        let sample = hypot(Double(delta.x), Double(delta.y)) / interval
+        let filtered = speed.map { $0 + (sample - $0) * min(interval * 25, 1) } ?? sample
+        speed = filtered
+        let fraction = filtered / (filtered + 520)
+        let gain = 0.75 + 2.55 * fraction * fraction
+        return CGPoint(x: delta.x * gain, y: delta.y * gain)
+    }
+}
+
+public struct ManyFingerMotion {
+    private enum Mode { case undecided, drag, completed }
+    private let fingers: Int
+    private let threeFingerDrag: Bool
+    private let startingSpan: Double
+    private var lastCenter: CGPoint
+    private var mode = Mode.undecided
+
+    public init(fingers: Int, center: CGPoint, span: Double, threeFingerDrag: Bool) {
+        self.fingers = fingers
+        self.threeFingerDrag = threeFingerDrag
+        startingSpan = max(span, 1)
+        lastCenter = center
+    }
+
+    public mutating func consume(center: CGPoint, span: Double) -> [MouseCommand] {
+        guard mode != .completed else { return [] }
+        let x = Double(center.x - lastCenter.x), y = Double(center.y - lastCenter.y)
+        let distance = hypot(x, y)
+        if fingers == 3 && threeFingerDrag {
+            guard mode == .drag || distance >= 8 else { return [] }
+            let move = MouseCommand(.move, x: x, y: y)
+            lastCenter = center
+            if mode == .drag { return [move] }
+            mode = .drag
+            return [MouseCommand(.dragStart), move]
+        }
+        let spread = span - startingSpan
+        let action: MouseCommand.Action?
+        if fingers == 4 && abs(spread) >= max(22, startingSpan * 0.22) && abs(spread) >= distance {
+            action = spread > 0 ? .showDesktop : .showApplications
+        } else {
+            action = TrackpadNavigation.action(x: x, y: y)
+        }
+        guard let action else { return [] }
+        mode = .completed
+        return [MouseCommand(action)]
+    }
+
+    public func end() -> [MouseCommand] {
+        mode == .drag ? [MouseCommand(.dragEnd)] : []
     }
 }
 
@@ -118,15 +218,26 @@ public struct NavigationShortcut: Equatable {
         case .nextSpace: return "81"
         case .missionControl: return "32"
         case .appWindows: return "33"
+        case .showDesktop: return "36"
+        case .notificationCenter: return "163"
         default: return nil
         }
     }
     public static func resolve(_ action: MouseCommand.Action, preferences: [String: Any]) -> NavigationShortcut? {
         guard let identifier = identifier(for: action) else { return nil }
-        let defaultKeys: [String: UInt16] = ["79": 123, "81": 124, "32": 126, "33": 125]
-        let fallback = NavigationShortcut(keyCode: defaultKeys[identifier]!, flags: 1 << 18)
+        let fallback: NavigationShortcut?
+        switch action {
+        case .previousSpace: fallback = NavigationShortcut(keyCode: 123, flags: 1 << 18)
+        case .nextSpace: fallback = NavigationShortcut(keyCode: 124, flags: 1 << 18)
+        case .missionControl: fallback = NavigationShortcut(keyCode: 126, flags: 1 << 18)
+        case .appWindows: fallback = NavigationShortcut(keyCode: 125, flags: 1 << 18)
+        case .showDesktop: fallback = NavigationShortcut(keyCode: 103, flags: 1 << 23)
+        case .notificationCenter: fallback = NavigationShortcut(keyCode: 45, flags: 1 << 23)
+        default: fallback = nil
+        }
         guard let entry = preferences[identifier] as? [String: Any] else { return fallback }
         if let enabled = entry["enabled"] as? NSNumber, !enabled.boolValue { return nil }
+        if entry["value"] == nil { return fallback }
         guard let value = entry["value"] as? [String: Any],
               let parameters = value["parameters"] as? [NSNumber], parameters.count == 3,
               parameters[1].intValue >= 0, parameters[1].intValue <= 127,
@@ -140,11 +251,13 @@ public struct ReceiverStatus: Codable, Equatable {
     public let kind: String
     public let version: Int
     public let mouseControlEnabled: Bool
+    public let trackpadGestures: Bool?
 
-    public init(mouseControlEnabled: Bool) {
+    public init(mouseControlEnabled: Bool, trackpadGestures: Bool? = nil) {
         self.kind = "receiverStatus"
         self.version = 1
         self.mouseControlEnabled = mouseControlEnabled
+        self.trackpadGestures = trackpadGestures
     }
 
     public static func decode(_ data: Data) -> ReceiverStatus? {

@@ -42,6 +42,30 @@ struct MouseDriverChecks {
         events = []
         driver.perform(MouseCommand(.scroll, y: 10))
         check(events.count == 1 && events[0].type == .scrollWheel && events[0].flags.isEmpty, "Scroll must not inherit shortcut modifiers")
+        events = []
+        driver.perform(MouseCommand(.scrollStart))
+        driver.perform(MouseCommand(.scroll, x: 5, y: 10))
+        driver.perform(MouseCommand(.scrollEnd, y: 400))
+        driver.perform(MouseCommand(.stopScroll))
+        check(events.map { $0.getIntegerValueField(CGEventField(rawValue: 99)!) } == [1, 2, 4, 0, 0],
+              "Scroll has begin, change and end phases")
+        check(events.map { $0.getIntegerValueField(CGEventField(rawValue: 123)!) } == [0, 0, 0, 1, 3],
+              "Momentum starts on lift and stops on a new touch")
+        events = []
+        driver.perform(MouseCommand(.magnifyStart))
+        driver.perform(MouseCommand(.magnify, x: 0.2))
+        driver.perform(MouseCommand(.magnifyEnd))
+        driver.perform(MouseCommand(.rotateStart))
+        driver.perform(MouseCommand(.rotate, x: 18))
+        driver.release()
+        driver.perform(MouseCommand(.smartZoom))
+        let cocoa = events.compactMap(NSEvent.init(cgEvent:))
+        check(cocoa.map(\.type) == [.magnify, .magnify, .magnify, .rotate, .rotate, .rotate, .smartMagnify],
+              "AppKit recognizes generated trackpad events")
+        check(cocoa.count == 7 && abs(cocoa[1].magnification - 0.2) < 0.01 && abs(cocoa[4].rotation - 18) < 0.01,
+              "AppKit receives the pinch and rotation deltas")
+        check(cocoa.count == 7 && cocoa[2].phase == .ended && cocoa[5].phase == .ended,
+              "Ending input releases in-progress gestures")
         let blocked = MouseDriver(permissionOverride: { false }, eventSink: { _ in preconditionFailure("Blocked input was emitted") })
         blocked.perform(MouseCommand(.leftClick))
         print("Passed \(checks) mouse event regression checks; no events posted.")

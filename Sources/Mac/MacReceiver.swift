@@ -104,7 +104,7 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     }
 
     private func sendStatus() {
-        guard let data = try? JSONEncoder().encode(ReceiverStatus(mouseControlEnabled: permission)) else { return }
+        guard let data = try? JSONEncoder().encode(ReceiverStatus(mouseControlEnabled: permission, trackpadGestures: true)) else { return }
         if case .approved = directStage { direct?.send(data) }
         let peers = session.connectedPeers.filter { approvedPeers.contains($0) }
         guard !peers.isEmpty else { return }
@@ -297,11 +297,27 @@ final class MacReceiver: NSObject, ObservableObject, MCSessionDelegate, MCNearby
     private func handleCommand(_ command: MouseCommand) {
         lastPacketAt = Date()
         if command.action == .heartbeat { sendStatus(); return }
+        if command.action == .stopScroll { driver.perform(command); return }
         receivedCommands += 1
         driver.perform(command)
-        let navigation: [MouseCommand.Action: String] = [.nextSpace: "Next desktop space", .previousSpace: "Previous desktop space", .missionControl: "Mission Control", .appWindows: "Application windows"]
-        lastAction = permission ? (driver.lastIssue ?? navigation[command.action] ?? "Receiving input") : "Input blocked: enable Accessibility"
+        if let issue = driver.lastIssue { lastAction = issue }
+        else if !permission { lastAction = "Input blocked: enable Accessibility" }
+        else if let gesture = Self.gestureNames[command.action] { lastAction = gesture }
+        else {
+            switch command.action {
+            case .move, .leftClick, .rightClick, .doubleClick, .dragStart: lastAction = "Receiving input"
+            default: break
+            }
+        }
     }
+
+    private static let gestureNames: [MouseCommand.Action: String] = [
+        .nextSpace: "Next desktop space", .previousSpace: "Previous desktop space",
+        .missionControl: "Mission Control", .appWindows: "Application windows", .showDesktop: "Show Desktop",
+        .showApplications: "Apps", .lookUp: "Look Up", .notificationCenter: "Notification Center",
+        .previousPage: "Previous page", .nextPage: "Next page", .smartZoom: "Smart Zoom",
+        .scroll: "Scrolling", .magnify: "Pinch to zoom", .rotate: "Rotate"
+    ]
 
     private var availableForController: Bool {
         accepting && direct == nil && !reserved && controller == nil && invitation == nil && session.connectedPeers.isEmpty

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import MultipeerConnectivity
 import RemotePadCore
 
@@ -37,14 +38,53 @@ struct ProtocolChecks {
         check(twoFingerScroll.consume(center: CGPoint(x: 2, y: 2), span: 104, naturalScrolling: true).isEmpty,
               "A two-finger tap can move slightly without becoming a scroll or pinch")
         check(twoFingerScroll.consume(center: CGPoint(x: 0, y: 12), span: 107, naturalScrolling: true) ==
-              [MouseCommand(.scroll, y: 24)], "Two-finger scroll survives changes in finger spacing")
+              [MouseCommand(.scrollStart), MouseCommand(.scroll, y: 24)], "Two-finger scroll survives changes in finger spacing")
         check(twoFingerScroll.consume(center: CGPoint(x: 2, y: 20), span: 130, naturalScrolling: false) ==
               [MouseCommand(.scroll, x: -4, y: -16)], "A scroll stays a scroll and honors reversed scrolling")
-        var twoFingerPinch = TwoFingerMotion(center: .zero, span: 100)
+        var disabledPinch = TwoFingerMotion(center: .zero, span: 100)
+        check(disabledPinch.consume(center: CGPoint(x: 1, y: 2), span: 125, naturalScrolling: true).isEmpty,
+              "Pinch to zoom is off by default")
+        check(disabledPinch.consume(center: CGPoint(x: 0, y: 16), span: 125, naturalScrolling: true) ==
+              [MouseCommand(.scrollStart), MouseCommand(.scroll, y: 32)], "With pinch off, spacing changes do not lock out scrolling")
+        var twoFingerPinch = TwoFingerMotion(center: .zero, span: 100, pinchZoom: true)
         check(twoFingerPinch.consume(center: CGPoint(x: 1, y: 2), span: 125, naturalScrolling: true) ==
-              [MouseCommand(.zoomIn)], "Spreading fingers zooms without scrolling")
-        check(twoFingerPinch.consume(center: CGPoint(x: 24, y: 36), span: 95, naturalScrolling: true) ==
-              [MouseCommand(.zoomOut)], "A pinch stays a pinch when its center moves")
+              [MouseCommand(.magnifyStart), MouseCommand(.magnify, x: 0.25)], "Spreading fingers zooms without scrolling")
+        let zoomBack = twoFingerPinch.consume(center: CGPoint(x: 24, y: 36), span: 95, naturalScrolling: true)
+        check(zoomBack.count == 1 && zoomBack[0].action == .magnify && zoomBack[0].x < 0,
+              "A pinch stays a pinch when its center moves")
+        check(twoFingerPinch.end() == [MouseCommand(.magnifyEnd)], "Pinch sends a release phase")
+        var twist = TwoFingerMotion(center: .zero, span: 100, angle: .pi - 0.05)
+        let rotation = twist.consume(center: .zero, span: 100, angle: -.pi + 0.15, naturalScrolling: true)
+        check(rotation.map(\.action) == [.rotateStart, .rotate] && abs(rotation[1].x) < 15,
+              "Finger rotation wraps across the angle boundary")
+        var edge = TwoFingerMotion(center: .zero, span: 70, notificationEdge: true)
+        check(edge.consume(center: CGPoint(x: -36, y: 2), span: 70, naturalScrolling: true) ==
+              [MouseCommand(.notificationCenter)], "Swipe from the right edge opens Notification Center")
+        var pages = TwoFingerMotion(center: .zero, span: 80, pageSwipes: true)
+        check(pages.consume(center: CGPoint(x: 55, y: 3), span: 80, naturalScrolling: true) ==
+              [MouseCommand(.previousPage)], "Enabled horizontal page swipe navigates back")
+        var threeFinger = ManyFingerMotion(fingers: 3, center: .zero, span: 70, threeFingerDrag: false)
+        check(threeFinger.consume(center: CGPoint(x: -60, y: 0), span: 74) == [MouseCommand(.nextSpace)],
+              "Three fingers navigate between spaces")
+        var fourFinger = ManyFingerMotion(fingers: 4, center: .zero, span: 100, threeFingerDrag: true)
+        check(fourFinger.consume(center: CGPoint(x: 0, y: -62), span: 101) == [MouseCommand(.missionControl)],
+              "Four-finger navigation still works with three-finger drag")
+        var spread = ManyFingerMotion(fingers: 4, center: .zero, span: 100, threeFingerDrag: false)
+        check(spread.consume(center: .zero, span: 138) == [MouseCommand(.showDesktop)], "Four-finger spread reveals the desktop")
+        check(spread.consume(center: .zero, span: 160).isEmpty, "Desktop gesture fires only once")
+        var apps = ManyFingerMotion(fingers: 4, center: .zero, span: 100, threeFingerDrag: false)
+        check(apps.consume(center: .zero, span: 68) == [MouseCommand(.showApplications)], "Four-finger pinch opens Apps")
+        var drag = ManyFingerMotion(fingers: 3, center: .zero, span: 70, threeFingerDrag: true)
+        check(drag.consume(center: CGPoint(x: 12, y: 0), span: 70) == [MouseCommand(.dragStart), MouseCommand(.move, x: 12)],
+              "Three-finger drag presses and moves")
+        check(drag.end() == [MouseCommand(.dragEnd)], "Three-finger drag releases on lift")
+        var slow = PointerAcceleration()
+        var fast = PointerAcceleration()
+        let delta = CGPoint(x: 12, y: -6)
+        let slowOutput = slow.apply(to: delta, elapsed: 0.08)
+        let fastOutput = fast.apply(to: delta, elapsed: 0.006)
+        check(fastOutput.x > delta.x && fastOutput.x > slowOutput.x && fastOutput.y < slowOutput.y,
+              "Pointer gain increases with speed and keeps the direction")
         check(TrackpadNavigation.action(x: 12, y: 20) == nil, "Short swipe should do nothing")
         check(TrackpadNavigation.action(x: -70, y: 10) == .nextSpace, "Left swipe")
         check(TrackpadNavigation.action(x: 70, y: 10) == .previousSpace, "Right swipe")
@@ -102,6 +142,8 @@ struct ProtocolChecks {
         check(NavigationShortcut.resolve(.nextSpace, preferences: customized) == NavigationShortcut(keyCode: 124, flags: fnControl), "Preserve configured Fn-Control shortcut")
         check(NavigationShortcut.resolve(.previousSpace, preferences: [:]) == NavigationShortcut(keyCode: 123, flags: 1 << 18), "Use default shortcut when no override exists")
         check(NavigationShortcut.resolve(.nextSpace, preferences: ["81": ["enabled": false]]) == nil, "Respect disabled shortcuts")
+        check(NavigationShortcut.resolve(.nextSpace, preferences: ["81": ["enabled": true]]) ==
+              NavigationShortcut(keyCode: 124, flags: 1 << 18), "Enabled-only macOS entries retain the default shortcut")
         check(NavigationShortcut.resolve(.nextSpace, preferences: ["81": ["enabled": true, "value": ["parameters": [1, 999, 1]]]]) == nil, "Reject invalid virtual key")
         check(NavigationShortcut.resolve(.leftClick, preferences: [:]) == nil, "Clicks cannot resolve to navigation keys")
         var stroke = NavigationStroke()
